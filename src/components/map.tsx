@@ -1,0 +1,202 @@
+import { useEffect, useRef } from 'react'
+import L from 'leaflet'
+import 'leaflet.markercluster'
+import type { GeoLocation } from '../lib/types'
+import { cn } from './ui'
+
+export type MapProps = {
+  locations: GeoLocation[]
+  className?: string
+  height?: number | string
+  tileUrl?: string
+  attribution?: string
+  activeId?: string | null
+  onSelect?: (location: GeoLocation) => void
+  center?: [number, number]
+  zoom?: number
+  color?: string
+}
+
+function pointIcon(index: number) {
+  return L.divIcon({
+    html: `<div class="xyz-pin"><span>${index}</span></div>`,
+    className: 'xyz-marker',
+    iconSize: [30, 30],
+    iconAnchor: [15, 28],
+    popupAnchor: [0, -26],
+  })
+}
+
+export function ProjectMap({
+  locations, className, height = 420, tileUrl, attribution, activeId, onSelect, center, zoom = 5, color = '#245A46',
+}: MapProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const mapRef = useRef<L.Map | null>(null)
+  const layerRef = useRef<L.LayerGroup | null>(null)
+  const selectRef = useRef(onSelect)
+  selectRef.current = onSelect
+
+  useEffect(() => {
+    if (!containerRef.current || mapRef.current) return
+    const map = L.map(containerRef.current, {
+      center: center ?? [-2.5, 118],
+      zoom,
+      zoomControl: true,
+      scrollWheelZoom: false,
+      attributionControl: true,
+    })
+    L.tileLayer(tileUrl || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: attribution ?? '&copy; OpenStreetMap contributors',
+      maxZoom: 19,
+      minZoom: 3,
+      detectRetina: false,
+    }).addTo(map)
+    layerRef.current = L.layerGroup().addTo(map)
+    mapRef.current = map
+    const resize = () => map.invalidateSize()
+    setTimeout(resize, 120)
+    window.addEventListener('resize', resize)
+    return () => {
+      window.removeEventListener('resize', resize)
+      map.remove()
+      mapRef.current = null
+      layerRef.current = null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Tile URL / attribution can be changed in the branding editor.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !tileUrl) return
+    map.eachLayer((layer) => {
+      if (layer instanceof L.TileLayer) map.removeLayer(layer)
+    })
+    L.tileLayer(tileUrl, {
+      attribution: attribution ?? '&copy; OpenStreetMap contributors',
+      maxZoom: 19,
+      minZoom: 3,
+    }).addTo(map)
+  }, [tileUrl, attribution])
+
+  useEffect(() => {
+    const map = mapRef.current
+    const layer = layerRef.current
+    if (!map || !layer) return
+    layer.clearLayers()
+
+    const cluster = (L as any).markerClusterGroup({
+      showCoverageOnHover: false,
+      maxClusterRadius: 46,
+      spiderfyOnMaxZoom: true,
+      iconCreateFunction: (c: any) =>
+        L.divIcon({
+          html: `<div>${c.getChildCount()}</div>`,
+          className: 'marker-cluster marker-cluster-small',
+          iconSize: L.point(40, 40),
+        }),
+    })
+    const bounds: L.LatLngExpression[] = []
+    let index = 0
+
+    for (const loc of locations) {
+      if (!loc.geojson?.coordinates) continue
+      const geo = loc.geojson
+      if (loc.type === 'point' && geo.type === 'Point') {
+        index++
+        const [lng, lat] = geo.coordinates as [number, number]
+        if (typeof lat !== 'number' || typeof lng !== 'number') continue
+        const marker = L.marker([lat, lng], { icon: pointIcon(index), title: loc.name })
+        const popup = document.createElement('div')
+        popup.className = 'min-w-[170px]'
+        const title = document.createElement('p')
+        title.className = 'text-[13px] font-semibold text-ink'
+        title.textContent = loc.name
+        popup.appendChild(title)
+        if (loc.project_title) {
+          const project = document.createElement('p')
+          project.className = 'text-[11px] text-muted'
+          project.textContent = loc.project_title
+          popup.appendChild(project)
+        }
+        if (loc.description) {
+          const desc = document.createElement('p')
+          desc.className = 'mt-1 text-[11px] leading-snug text-muted'
+          desc.textContent = loc.description
+          popup.appendChild(desc)
+        }
+        if (selectRef.current) {
+          const button = document.createElement('button')
+          button.textContent = 'Lihat detail'
+          button.className = 'mt-2 rounded-full px-2.5 py-1 text-[11px] font-medium text-white'
+          button.style.backgroundColor = color
+          button.onclick = () => selectRef.current?.(loc)
+          popup.appendChild(button)
+        }
+        marker.bindPopup(popup)
+        cluster.addLayer(marker)
+        bounds.push([lat, lng])
+      } else {
+        const feature = L.geoJSON(geo as any, {
+          style: {
+            color,
+            weight: 3,
+            opacity: 0.9,
+            fillColor: color,
+            fillOpacity: 0.18,
+          },
+        })
+        const popup = document.createElement('div')
+        const title = document.createElement('p')
+        title.className = 'text-[13px] font-semibold text-ink'
+        title.textContent = loc.name
+        popup.appendChild(title)
+        const meta = document.createElement('p')
+        meta.className = 'text-[11px] text-muted'
+        meta.textContent = loc.project_title ?? (loc.type === 'line' ? 'Jalur' : 'Area')
+        popup.appendChild(meta)
+        feature.bindPopup(popup)
+        feature.on('click', () => selectRef.current?.(loc))
+        layer.addLayer(feature)
+        feature.eachLayer((l: any) => {
+          if (l.getBounds) {
+            const b = l.getBounds()
+            bounds.push(b.getCenter())
+          }
+        })
+      }
+    }
+
+    if (index > 0) {
+      layer.addLayer(cluster)
+    }
+
+    if (bounds.length > 0 && locations.length > 0) {
+      const fits = L.latLngBounds(bounds)
+      if (fits.isValid()) {
+        map.fitBounds(fits.pad(0.22), { maxZoom: 12, animate: false })
+      }
+    }
+  }, [locations, color])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !activeId) return
+    const target = locations.find((l) => l.id === activeId)
+    if (!target) return
+    const coords = target.geojson?.coordinates
+    if (target.type === 'point' && Array.isArray(coords)) {
+      map.setView([coords[1], coords[0]], Math.max(map.getZoom(), 11), { animate: true })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId])
+
+  return (
+    <div
+      ref={containerRef}
+      className={cn('relative w-full overflow-hidden rounded-2xl border border-line', className)}
+      style={{ height }}
+      aria-label="Peta lokasi proyek"
+    />
+  )
+}

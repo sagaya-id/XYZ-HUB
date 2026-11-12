@@ -1,0 +1,210 @@
+@import 'tailwindcss';
+@import 'leaflet/dist/leaflet.css';
+@import 'leaflet.markercluster/dist/MarkerCluster.css';
+@import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
+
+@theme {
+  --color-canvas: #f7f8f6;
+  --color-card: #ffffff;
+  --color-forest: #245a46;
+  --color-forest-600: #1e4b3a;
+  --color-forest-50: #eef4f0;
+  --color-forest-100: #dcebe2;
+  --color-ink: #1f2933;
+  --color-muted: #687780;
+  --color-line: #e4e8e3;
+  --color-sand: #f1efe9;
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --radius-xl: 1.25rem;
+  --radius-2xl: 1.75rem;
+  --shadow-soft: 0 1px 2px rgba(31, 41, 51, 0.04), 0 12px 32px -12px rgba(31, 41, 51, 0.14);
+  --shadow-lift: 0 2px 6px rgba(31, 41, 51, 0.06), 0 24px 48px -24px rgba(31, 41, 51, 0.24);
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    -webkit-font-smoothing: antialiased;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #cfd6d0 transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 9px;
+    height: 9px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #d4dad4;
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  h1, h2, h3, h4 {
+    letter-spacing: -0.02em;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-forest);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  .card {
+    background: var(--color-card);
+    border: 1px solid var(--color-line);
+    border-radius: 1.25rem;
+    box-shadow: 0 1px 2px rgba(31, 41, 51, 0.03);
+  }
+  .card-lift {
+    @apply transition-all duration-300 hover:-translate-y-0.5;
+    background: var(--color-card);
+    border: 1px solid var(--color-line);
+    border-radius: 1.25rem;
+    box-shadow: var(--shadow-soft);
+  }
+  .card-lift:hover {
+    box-shadow: var(--shadow-lift);
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-medium transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-medium transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply bg-forest text-white hover:bg-forest-600 active:scale-[0.985];
+    box-shadow: 0 8px 20px -12px rgba(36, 90, 70, 0.9);
+  }
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-medium transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply border border-line bg-white text-ink hover:border-forest/30 hover:bg-forest-50;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-medium transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply text-muted hover:bg-sand hover:text-ink;
+  }
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-medium transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply border border-red-200 bg-red-50 text-red-700 hover:bg-red-100;
+  }
+  .btn-sm {
+    @apply px-3 py-1.5 text-xs;
+  }
+  .input {
+    @apply w-full rounded-xl border border-line bg-white px-3.5 py-2.5 text-sm text-ink placeholder:text-muted/70 focus:border-forest/40 focus:ring-4 focus:ring-forest/10 focus:outline-none;
+  }
+  .label {
+    @apply mb-1.5 block text-xs font-medium tracking-wide text-muted uppercase;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-line bg-white px-3 py-1 text-xs font-medium text-muted;
+  }
+  .chip-active {
+    @apply border-forest/20 bg-forest-50 text-forest;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold;
+  }
+  .section-title {
+    @apply text-lg font-semibold text-ink;
+  }
+  .muted {
+    @apply text-sm text-muted;
+  }
+  .divider {
+    @apply h-px w-full bg-line;
+  }
+  .nav-item {
+    @apply flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-medium text-muted transition-colors hover:bg-forest-50 hover:text-forest;
+  }
+  .nav-item-active {
+    @apply bg-forest-50 text-forest;
+  }
+  .glass {
+    background: rgba(255, 255, 255, 0.82);
+    backdrop-filter: saturate(180%) blur(18px);
+  }
+  .field-grid {
+    @apply grid gap-4 sm:grid-cols-2;
+  }
+  .slab {
+    @apply rounded-2xl border border-line bg-canvas/60 p-4;
+  }
+}
+
+/* Leaflet refinements */
+.leaflet-container {
+  font-family: var(--font-sans);
+  background: #e8ede6;
+  z-index: 0;
+}
+.leaflet-popup-content-wrapper {
+  border-radius: 14px;
+  box-shadow: 0 18px 40px -20px rgba(31, 41, 51, 0.5);
+}
+.leaflet-popup-content {
+  margin: 12px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.leaflet-bar a {
+  color: var(--color-ink);
+}
+.xyz-pin {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px 999px 999px 4px;
+  transform: rotate(-45deg);
+  background: var(--color-forest);
+  border: 2px solid #fff;
+  box-shadow: 0 6px 14px -4px rgba(31, 41, 51, 0.5);
+}
+.xyz-pin span {
+  transform: rotate(45deg);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+.marker-cluster-small,
+.marker-cluster-medium,
+.marker-cluster-large {
+  background: rgba(36, 90, 70, 0.18);
+}
+.marker-cluster-small div,
+.marker-cluster-medium div,
+.marker-cluster-large div {
+  background: var(--color-forest);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* Calendar */
+.cal-cell {
+  min-height: 7.5rem;
+}
+.cal-cell-mobile {
+  min-height: 4.6rem;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.dragging-card {
+  cursor: grabbing;
+  box-shadow: var(--shadow-lift);
+}
+
+@media print {
+  .no-print { display: none !important; }
+}
