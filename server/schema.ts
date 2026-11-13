@@ -149,6 +149,7 @@ export const SCHEMA: string[] = [
     lon REAL,
     lat REAL,
     visibility TEXT NOT NULL DEFAULT 'entity' CHECK (visibility IN ('team','entity')),
+    google_maps_url TEXT,
     created_by TEXT,
     created_at TEXT NOT NULL
   )`,
@@ -290,6 +291,22 @@ export const SCHEMA: string[] = [
     visibility TEXT NOT NULL DEFAULT 'entity',
     created_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS reminders (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    project_id TEXT,
+    title TEXT NOT NULL,
+    body TEXT,
+    remind_at TEXT NOT NULL,
+    done_at TEXT,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS reminder_settings (
+    user_id TEXT PRIMARY KEY,
+    lead_days INTEGER NOT NULL DEFAULT 3,
+    updated_at TEXT NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS holidays (
     date TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -317,6 +334,7 @@ export const SCHEMA: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_logbooks_project ON logbooks(project_id, visit_date)`,
   `CREATE INDEX IF NOT EXISTS idx_records_project ON data_records(project_id)`,
   `CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_reminders_user ON reminders(user_id, remind_at)`,
 ]
 
 // Raw SQL file used for the optional local `wrangler d1 execute` path.

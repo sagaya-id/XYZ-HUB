@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import type { AppEnv } from './ctx'
-import { run, one, nowIso, type Env } from './db'
+import { run, one, q, nowIso, type Env } from './db'
 import { SCHEMA } from './schema'
 import { HttpError } from './scope'
 import { userFromRequest, SESSION_COOKIE, type SessionUser } from './auth'
@@ -18,6 +18,7 @@ import { fileRoutes } from './routes/files'
 import { notificationRoutes } from './routes/notifications'
 import { adminRoutes } from './routes/admin'
 import { homeRoutes } from './routes/home'
+import { reminderRoutes } from './routes/reminders'
 
 const app = new Hono<AppEnv>()
 
@@ -33,6 +34,15 @@ async function boot(env: Env) {
           // Table/index already present or statement needs no-op; surface real errors
           console.error('schema statement failed', err)
         }
+      }
+      // Additive migration for databases created before the Google Maps column.
+      try {
+        const columns = await q<any>(env.DB, `PRAGMA table_info(locations)`)
+        if (columns.length && !columns.some((column: any) => column.name === 'google_maps_url')) {
+          await run(env.DB, `ALTER TABLE locations ADD COLUMN google_maps_url TEXT`)
+        }
+      } catch (err) {
+        console.error('locations migration failed', err)
       }
       await ensureSeed(env)
     })().catch((err) => {
@@ -95,6 +105,7 @@ app.route('/api', noteRoutes)
 app.route('/api', dataRoutes)
 app.route('/api', fileRoutes)
 app.route('/api', notificationRoutes)
+app.route('/api', reminderRoutes)
 app.route('/api', adminRoutes)
 
 app.all('/api/*', (c) => c.json({ error: 'Endpoint tidak ditemukan.' }, 404))

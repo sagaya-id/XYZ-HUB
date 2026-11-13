@@ -1,9 +1,9 @@
-import { useRef, useState } from 'react'
-import { ImagePlus, Layers, MapPin, Plus, Search, Trash2, Upload } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { ExternalLink, ImagePlus, Layers, MapPin, Plus, Search, Trash2, Upload } from 'lucide-react'
 import { api, uploadFile } from '../../lib/api'
 import { useApp, useAsync } from '../../lib/app-context'
 import type { GeoLocation, ProjectDetail } from '../../lib/types'
-import { ProjectMap } from '../../components/map'
+import { ProjectMap, googleMapsHref } from '../../components/map'
 import { GeoImportModal } from '../../components/geo-import'
 import {
   ConfirmDialog, EmptyState, Field, ImageUpload, LoadingBlock, Modal, SearchInput, Spinner,
@@ -76,26 +76,38 @@ export function MapTab({ project }: { project: ProjectDetail['project']; entityK
           />
           <div className="space-y-2 xl:max-h-[480px] xl:overflow-y-auto">
             {locations.map((loc) => (
-              <button
+              <div
                 key={loc.id}
-                onClick={() => setSelected(loc)}
                 className={cn(
-                  'flex w-full items-start gap-3 rounded-xl border border-line bg-white p-3 text-left transition-colors hover:border-forest/30',
+                  'overflow-hidden rounded-xl border border-line bg-white transition-colors hover:border-forest/30',
                   selected?.id === loc.id && 'border-forest/40 bg-forest-50/40',
                 )}
               >
-                <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-forest-50 text-forest">
-                  {loc.type === 'point' ? <MapPin className="h-4 w-4" /> : <Layers className="h-4 w-4" />}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium text-ink">{loc.name}</span>
-                  <span className="block truncate text-[11px] text-muted">{loc.description ?? `${loc.type} · ${loc.project_code ?? ''}`}</span>
-                  <span className="mt-1 flex items-center gap-1.5">
-                    <VisibilityBadge visibility={loc.visibility} />
-                    {(loc.logbook_count ?? 0) > 0 && <span className="chip !py-0.5 !text-[9px]">{loc.logbook_count} logbook</span>}
+                <button onClick={() => setSelected(loc)} className="flex w-full items-start gap-3 p-3 text-left">
+                  <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-forest-50 text-forest">
+                    {loc.type === 'point' ? <MapPin className="h-4 w-4" /> : <Layers className="h-4 w-4" />}
                   </span>
-                </span>
-              </button>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-ink">{loc.name}</span>
+                    <span className="block truncate text-[11px] text-muted">{loc.description ?? `${loc.type} · ${loc.project_code ?? ''}`}</span>
+                    <span className="mt-1 flex items-center gap-1.5">
+                      <VisibilityBadge visibility={loc.visibility} />
+                      {(loc.logbook_count ?? 0) > 0 && <span className="chip !py-0.5 !text-[9px]">{loc.logbook_count} logbook</span>}
+                    </span>
+                  </span>
+                </button>
+                {googleMapsHref(loc) && (
+                  <a
+                    href={googleMapsHref(loc)!}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="flex items-center gap-1.5 border-t border-line/70 px-3 py-1.5 text-[11px] font-medium text-forest hover:bg-forest-50/40"
+                  >
+                    <ExternalLink className="h-3 w-3" /> Buka di Google Maps
+                  </a>
+                )}
+              </div>
             ))}
             {locations.length === 0 && (
               <EmptyState icon={Search} title="Belum ada lokasi" description="Impor KML/GeoJSON atau tambahkan lokasi manual untuk proyek ini." />
@@ -130,7 +142,7 @@ function ManualLocationModal({
   projectId, canManage, onClose, onSaved,
 }: { projectId: string; canManage: boolean; onClose: () => void; onSaved: () => void }) {
   const { toast } = useApp()
-  const [form, setForm] = useState({ name: '', description: '', lat: '', lng: '', visibility: 'entity', geojson: '' })
+  const [form, setForm] = useState({ name: '', description: '', lat: '', lng: '', visibility: 'entity', geojson: '', googleMapsUrl: '' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -153,6 +165,7 @@ function ManualLocationModal({
         name: form.name,
         description: form.description,
         visibility: form.visibility,
+        googleMapsUrl: form.googleMapsUrl.trim() || null,
         geometry,
         type: geometry.type === 'Point' ? 'point' : geometry.type === 'LineString' ? 'line' : 'polygon',
       })
@@ -198,6 +211,12 @@ function ManualLocationModal({
         <Field label="Geometri GeoJSON (opsional)" hint='Contoh: {"type":"LineString","coordinates":[[106.8,-6.5],[106.9,-6.6]]}'>
           <textarea className="input min-h-[70px] font-mono text-[11px]" value={form.geojson} onChange={(e) => setForm({ ...form, geojson: e.target.value })} />
         </Field>
+        <Field
+          label="Tautan Google Maps (opsional)"
+          hint="Kosongkan untuk memakai tautan otomatis https://www.google.com/maps?q=lat,lng dari koordinat."
+        >
+          <input className="input" value={form.googleMapsUrl} onChange={(e) => setForm({ ...form, googleMapsUrl: e.target.value })} placeholder="https://maps.app.goo.gl/…" />
+        </Field>
         <Field label="Visibilitas">
           <select className="input" value={form.visibility} onChange={(e) => setForm({ ...form, visibility: e.target.value })}>
             <option value="entity">Seluruh entitas</option>
@@ -218,11 +237,33 @@ export function LocationDetail({
   const fileRef = useRef<HTMLInputElement>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [mapsDraft, setMapsDraft] = useState('')
+  const [mapsSaving, setMapsSaving] = useState(false)
   const { data, reload } = useAsync<{ location: GeoLocation; logbooks: any[] }>(
     () => api.get(`/api/locations/${location.id}`),
     [location.id],
   )
   const detail = data?.location ?? location
+  const mapsHref = googleMapsHref(detail)
+
+  useEffect(() => {
+    setMapsDraft(detail.google_maps_url ?? '')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail.id, detail.google_maps_url])
+
+  async function saveMapsUrl() {
+    setMapsSaving(true)
+    try {
+      await api.patch(`/api/locations/${location.id}`, { googleMapsUrl: mapsDraft.trim() })
+      toast('Tautan Google Maps disimpan.')
+      reload()
+      onChanged()
+    } catch (err: any) {
+      toast(err?.message ?? 'Gagal menyimpan tautan', 'error')
+    } finally {
+      setMapsSaving(false)
+    }
+  }
 
   async function uploadPhoto(file: File | null) {
     if (!file) return
@@ -257,7 +298,12 @@ export function LocationDetail({
                 <span className="text-[11px] text-muted">{Number(detail.lat).toFixed(5)}, {Number(detail.lon).toFixed(5)}</span>
               )}
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
+              {mapsHref && (
+                <a href={mapsHref} target="_blank" rel="noopener noreferrer" className="btn-secondary btn-sm">
+                  <ExternalLink className="h-3.5 w-3.5" /> Buka di Google Maps
+                </a>
+              )}
               <button className="btn-secondary btn-sm" onClick={() => fileRef.current?.click()} disabled={busy}>
                 {busy ? <Spinner /> : <ImagePlus className="h-3.5 w-3.5" />} Tambah foto
               </button>
@@ -271,6 +317,31 @@ export function LocationDetail({
       >
         <div className="space-y-4">
           {detail.description && <p className="text-sm leading-relaxed text-muted">{detail.description}</p>}
+          <div className="rounded-xl border border-line p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-ink">Tautan Google Maps</p>
+              {mapsHref && (
+                <a href={mapsHref} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[11px] font-medium text-forest hover:underline">
+                  <ExternalLink className="h-3 w-3" /> Buka di Google Maps
+                </a>
+              )}
+            </div>
+            <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+              <input
+                className="input"
+                value={mapsDraft}
+                onChange={(e) => setMapsDraft(e.target.value)}
+                placeholder="https://maps.app.goo.gl/… (kosongkan untuk otomatis dari koordinat)"
+              />
+              <button className="btn-secondary shrink-0" onClick={saveMapsUrl} disabled={mapsSaving}>
+                {mapsSaving ? <Spinner /> : null} Simpan tautan
+              </button>
+            </div>
+            <p className="mt-1.5 text-[10px] text-muted">
+              Tautan tersimpan dipakai oleh tombol pada kartu lokasi dan popup peta. Bila dikosongkan, sistem memakai
+              tautan koordinat <span className="font-mono">https://www.google.com/maps?q=lat,lng</span>.
+            </p>
+          </div>
           <div>
             <p className="mb-2 text-sm font-semibold text-ink">Galeri lokasi</p>
             {(detail.photos ?? []).length === 0 ? (

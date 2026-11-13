@@ -32,9 +32,15 @@ export function todayIso(): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
 }
 
+/**
+ * Step a calendar date by whole days with pure UTC arithmetic.
+ * Never mixes the Jakarta wall clock with `toISOString()` (which shifts the
+ * date back one day), so ±1 always lands exactly one day away, all week long.
+ */
 export function addDaysIso(iso: string, days: number): string {
-  const date = new Date(`${iso}T00:00:00+07:00`)
-  date.setDate(date.getDate() + days)
+  const [year, month, day] = iso.slice(0, 10).split('-').map(Number)
+  const date = new Date(Date.UTC(year, (month ?? 1) - 1, day ?? 1))
+  date.setUTCDate(date.getUTCDate() + days)
   return date.toISOString().slice(0, 10)
 }
 
@@ -86,20 +92,17 @@ export function initials(name: string | null | undefined): string {
 }
 
 export function dateRangeForView(view: 'day' | 'week' | 'month' | 'year', anchor: string): { from: string; to: string } {
-  const base = new Date(`${anchor}T00:00:00+07:00`)
+  const [year, month, day] = anchor.slice(0, 10).split('-').map(Number)
   if (view === 'day') return { from: anchor, to: anchor }
   if (view === 'week') {
-    const day = (base.getDay() + 6) % 7
-    const start = new Date(base)
-    start.setDate(base.getDate() - day)
-    const end = new Date(start)
-    end.setDate(start.getDate() + 6)
-    return { from: start.toISOString().slice(0, 10), to: end.toISOString().slice(0, 10) }
+    const weekday = (new Date(Date.UTC(year, month - 1, day)).getUTCDay() + 6) % 7
+    const start = addDaysIso(anchor, -weekday)
+    return { from: start, to: addDaysIso(start, 6) }
   }
   if (view === 'year') return { from: `${anchor.slice(0, 4)}-01-01`, to: `${anchor.slice(0, 4)}-12-31` }
-  const first = new Date(base.getFullYear(), base.getMonth(), 1)
-  const last = new Date(base.getFullYear(), base.getMonth() + 1, 0)
-  return { from: first.toISOString().slice(0, 10), to: last.toISOString().slice(0, 10) }
+  const first = `${anchor.slice(0, 7)}-01`
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate()
+  return { from: first, to: `${anchor.slice(0, 7)}-${String(lastDay).padStart(2, '0')}` }
 }
 
 export function monthName(month: number): string {

@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ArrowDownUp, ChevronDown, Download, FileSpreadsheet, Filter, History, Link2, Plus, RefreshCw,
-  Table2, Trash2, Upload, X,
+  ArrowDownUp, CheckSquare, ChevronDown, Download, FileSpreadsheet, Filter, History, Link2, Plus,
+  RefreshCw, Table2, Trash2, Upload, X,
 } from 'lucide-react'
 import { api } from '../../lib/api'
 import { useApp, useAsync } from '../../lib/app-context'
@@ -103,6 +103,10 @@ export function DataTab({ project }: { project: ProjectDetail['project']; entity
   const [deleteTarget, setDeleteTarget] = useState<DataRecord | null>(null)
   const [sheetOpen, setSheetOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [bulkConfirm, setBulkConfirm] = useState(false)
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const selectAllRef = useRef<HTMLInputElement>(null)
 
   const fields = data?.fields ?? []
   const records = data?.records ?? []
@@ -152,6 +156,45 @@ export function DataTab({ project }: { project: ProjectDetail['project']; entity
     }
     return rows
   }, [records, filters, meta, search, sortKey, sortDir, fields])
+
+  // Selection only covers rows currently visible after search / filters.
+  const visibleIds = filtered.map((record) => record.id)
+  const selectedVisible = selectedIds.filter((id) => visibleIds.includes(id))
+  const allSelected = filtered.length > 0 && selectedVisible.length === filtered.length
+  const someSelected = selectedVisible.length > 0 && !allSelected
+
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = someSelected
+  }, [someSelected])
+
+  useEffect(() => {
+    setSelectedIds((prev) => prev.filter((id) => records.some((record) => record.id === id)))
+  }, [records])
+
+  function toggleAll() {
+    setSelectedIds(allSelected ? [] : visibleIds)
+  }
+
+  function toggleOne(id: string) {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((value) => value !== id) : [...prev, id]))
+  }
+
+  async function deleteSelected() {
+    setBulkBusy(true)
+    try {
+      const res = await api.post<{ deleted: number; denied: string[] }>('/api/data/records/bulk-delete', {
+        ids: selectedVisible,
+      })
+      toast(`${res.deleted} baris dihapus.${res.denied.length ? ` ${res.denied.length} ditolak karena hak akses.` : ''}`)
+      setSelectedIds([])
+      setBulkConfirm(false)
+      reload()
+    } catch (err: any) {
+      toast(err?.message ?? 'Gagal menghapus baris', 'error')
+    } finally {
+      setBulkBusy(false)
+    }
+  }
 
   function exportCsv(rows: DataRecord[], label: string) {
     const header = fields.map((f) => f.label)
@@ -248,10 +291,38 @@ export function DataTab({ project }: { project: ProjectDetail['project']; entity
               </button>
             </div>
           )}
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-white px-3 py-2">
+            <span className="text-[11px] font-medium text-ink">Tabel data</span>
+            {selectedVisible.length > 0 ? (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="flex items-center gap-1.5 rounded-full bg-forest-50 px-2.5 py-1 text-[11px] font-semibold text-forest">
+                  <CheckSquare className="h-3.5 w-3.5" /> {selectedVisible.length} item dipilih
+                </span>
+                <button className="btn-ghost btn-sm" onClick={() => setSelectedIds([])}>
+                  <X className="h-3.5 w-3.5" /> Batal
+                </button>
+                <button className="btn-danger btn-sm" onClick={() => setBulkConfirm(true)}>
+                  <Trash2 className="h-3.5 w-3.5" /> Hapus Terpilih
+                </button>
+              </div>
+            ) : (
+              <span className="text-[10px] text-muted">Pilih baris untuk tindakan massal</span>
+            )}
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[720px] text-sm">
               <thead className="bg-canvas/70">
                 <tr>
+                  <th className="w-8 px-2 pt-2.5 pb-1 align-bottom">
+                    <input
+                      ref={selectAllRef}
+                      type="checkbox"
+                      checked={allSelected}
+                      onChange={toggleAll}
+                      disabled={filtered.length === 0}
+                      aria-label="Pilih semua baris"
+                    />
+                  </th>
                   {fields.map((field) => (
                     <th key={field.id} className="px-3 pt-2.5 pb-1 text-left align-bottom">
                       <button
@@ -269,6 +340,7 @@ export function DataTab({ project }: { project: ProjectDetail['project']; entity
                   <th className="px-3 pt-2.5 pb-1 text-right align-bottom text-[11px] font-semibold tracking-wide text-muted uppercase">Aksi</th>
                 </tr>
                 <tr className="border-t border-line/70">
+                  <th className="px-2 pb-2" />
                   {fields.map((field) => {
                     const columnMeta = meta[field.key] ?? { kind: 'text' as FilterKind, options: [] }
                     const filter = filters[field.key] ?? EMPTY_FILTER
@@ -355,7 +427,18 @@ export function DataTab({ project }: { project: ProjectDetail['project']; entity
               </thead>
               <tbody>
                 {filtered.map((record) => (
-                  <tr key={record.id} className="border-t border-line hover:bg-canvas/50">
+                  <tr
+                    key={record.id}
+                    className={cn('border-t border-line hover:bg-canvas/50', selectedVisible.includes(record.id) && 'bg-forest-50/40')}
+                  >
+                    <td className="px-2 py-2">
+                      <input
+                        type="checkbox"
+                        checked={selectedVisible.includes(record.id)}
+                        onChange={() => toggleOne(record.id)}
+                        aria-label="Pilih baris data"
+                      />
+                    </td>
                     {fields.map((field) => (
                       <td key={field.id} className="max-w-[240px] truncate px-3 py-2 text-ink">{String(record.data[field.key] ?? '—')}</td>
                     ))}
@@ -365,7 +448,12 @@ export function DataTab({ project }: { project: ProjectDetail['project']; entity
                         {canContribute && (
                           <>
                             <button className="btn-ghost btn-sm" onClick={() => setRowModal({ record })}>Ubah</button>
-                            <button className="rounded-lg p-1.5 text-muted hover:bg-red-50 hover:text-red-600" onClick={() => setDeleteTarget(record)}>
+                            <button
+                              className="rounded-lg p-1.5 text-muted hover:bg-red-50 hover:text-red-600"
+                              onClick={() => setDeleteTarget(record)}
+                              aria-label="Hapus baris"
+                              title="Hapus"
+                            >
                               <Trash2 className="h-3.5 w-3.5" />
                             </button>
                           </>
@@ -376,7 +464,7 @@ export function DataTab({ project }: { project: ProjectDetail['project']; entity
                 ))}
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={fields.length + 1} className="px-3 py-4">
+                    <td colSpan={fields.length + 2} className="px-3 py-4">
                       <EmptyState
                         icon={Filter}
                         title="Tidak ada baris yang cocok"
@@ -483,6 +571,17 @@ export function DataTab({ project }: { project: ProjectDetail['project']; entity
           </div>
         )}
       </Modal>
+
+      <ConfirmDialog
+        open={bulkConfirm}
+        title={`Hapus ${selectedVisible.length} baris terpilih?`}
+        description="Baris yang dipilih dihapus dari tabel data proyek. Baris tanpa hak kontribusi akan dilewati."
+        danger
+        confirmLabel={`Hapus ${selectedVisible.length} baris`}
+        busy={bulkBusy}
+        onCancel={() => setBulkConfirm(false)}
+        onConfirm={deleteSelected}
+      />
 
       <ConfirmDialog
         open={!!deleteTarget}

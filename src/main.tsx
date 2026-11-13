@@ -12,6 +12,7 @@ import { WorkspacePage } from './pages/Workspace'
 import { LocationsPage } from './pages/LocationsPage'
 import { CalendarPage } from './pages/CalendarPage'
 import { AdminPage } from './pages/Admin'
+import { RemindersPage } from './pages/RemindersPage'
 import { ProfilePage } from './pages/Profile'
 
 function Root() {
@@ -26,6 +27,7 @@ function Root() {
         <Route path="projects/:projectId" element={<WorkspacePage />} />
         <Route path="locations" element={<LocationsPage />} />
         <Route path="calendar" element={<CalendarPage />} />
+        <Route path="reminders" element={<RemindersPage />} />
         <Route path="admin" element={<AdminPage />} />
         <Route path="profile" element={<ProfilePage />} />
       </Route>

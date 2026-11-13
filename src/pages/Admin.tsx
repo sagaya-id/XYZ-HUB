@@ -2,13 +2,13 @@ import { useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import {
   Check, Copy, Download, FileSpreadsheet, History, Palette, Search, ShieldCheck, UserCog,
-  UserPlus, Users,
+  UserPlus, UserX, Users,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { useApp, useAsync } from '../lib/app-context'
 import type { BrandingEntity, BrandingGlobal, Entity, User } from '../lib/types'
 import {
-  Avatar, Field, ImageUpload, LoadingBlock, Modal, PageHeader, SearchInput, Spinner, Tabs, cn,
+  Avatar, ConfirmDialog, Field, ImageUpload, LoadingBlock, Modal, PageHeader, SearchInput, Spinner, Tabs, cn,
 } from '../components/ui'
 import { ImportWizard } from '../components/import-wizard'
 import { formatDateTime, relativeTime } from '../lib/format'
@@ -63,6 +63,9 @@ function UsersPanel({ entityKey }: { entityKey: string }) {
   const [inviteOpen, setInviteOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [editing, setEditing] = useState<User | null>(null)
+  const [deactivateTarget, setDeactivateTarget] = useState<{ user: User; active: boolean } | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<User | null>(null)
+  const [busy, setBusy] = useState(false)
   const [inviteResult, setInviteResult] = useState<{ email: string; password: string; name: string }[] | null>(null)
 
   const { data, loading, reload } = useAsync<{ users: User[]; entity: Entity; canCreateRoles: string[] }>(
@@ -149,17 +152,17 @@ function UsersPanel({ entityKey }: { entityKey: string }) {
                         <button className="btn-ghost btn-sm" onClick={() => setEditing(user)}>
                           <UserCog className="h-3.5 w-3.5" /> Ubah
                         </button>
-                        {user.is_active && user.id !== me?.user.id && (
+                        {user.id !== me?.user.id && (
                           <button
-                            className="btn-ghost btn-sm !text-red-600"
-                            onClick={async () => {
-                              if (!window.confirm(`Nonaktifkan ${user.name}? Akses dicabut, riwayat kerja tetap tersimpan.`)) return
-                              await api.del(`/api/admin/users/${user.id}`).catch((e) => toast(e.message, 'error'))
-                              toast('Akun dinonaktifkan.')
-                              reload()
-                            }}
+                            className={cn('btn-ghost btn-sm', user.is_active ? '!text-amber-700' : '!text-forest')}
+                            onClick={() => setDeactivateTarget({ user, active: !user.is_active })}
                           >
-                            Nonaktifkan
+                            <UserX className="h-3.5 w-3.5" /> {user.is_active ? 'Nonaktifkan' : 'Aktifkan'}
+                          </button>
+                        )}
+                        {user.id !== me?.user.id && !(me?.user.role === 'SA' && user.role === 'MA') && (
+                          <button className="btn-ghost btn-sm !text-red-600" onClick={() => setDeleteTarget(user)}>
+                            Hapus Akun
                           </button>
                         )}
                       </div>
@@ -189,6 +192,64 @@ function UsersPanel({ entityKey }: { entityKey: string }) {
       )}
 
       {editing && <EditUserModal user={editing} entities={data ? [data.entity] : []} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); reload() }} />}
+
+      <ConfirmDialog
+        open={!!deactivateTarget}
+        title={deactivateTarget?.active ? 'Aktifkan kembali akun?' : 'Nonaktifkan akun?'}
+        description={
+          deactivateTarget?.active
+            ? `${deactivateTarget?.user.name} dapat masuk kembali setelah semua sesi diakhiri.`
+            : `${deactivateTarget?.user.name} tidak dapat masuk, namun seluruh riwayat kerja tetap tersimpan.`
+        }
+        danger={!deactivateTarget?.active}
+        confirmLabel={deactivateTarget?.active ? 'Aktifkan akun' : 'Nonaktifkan akun'}
+        busy={busy}
+        onCancel={() => setDeactivateTarget(null)}
+        onConfirm={async () => {
+          if (!deactivateTarget) return
+          setBusy(true)
+          try {
+            await api.post(`/api/admin/users/${deactivateTarget.user.id}/status`, { active: deactivateTarget.active })
+            toast(deactivateTarget.active ? 'Akun diaktifkan kembali.' : 'Akun dinonaktifkan.')
+            setDeactivateTarget(null)
+            reload()
+          } catch (err: any) {
+            toast(err?.message ?? 'Gagal mengubah status akun', 'error')
+          } finally {
+            setBusy(false)
+          }
+        }}
+      />
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title="Hapus akun secara permanen?"
+        description={
+          <span>
+            Akun <strong>{deleteTarget?.name}</strong> ({deleteTarget?.email}) dihapus permanen: kata sandi, sesi,
+            keanggotaan proyek, dan pengingat pribadi ikut terhapus. Riwayat proyek dan audit log tetap tersimpan
+            atas nama akun tersebut. Tindakan ini tidak dapat dibatalkan.
+          </span>
+        }
+        danger
+        confirmLabel="Hapus permanen"
+        busy={busy}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={async () => {
+          if (!deleteTarget) return
+          setBusy(true)
+          try {
+            await api.del(`/api/admin/users/${deleteTarget.id}`)
+            toast('Akun dihapus permanen.')
+            setDeleteTarget(null)
+            reload()
+          } catch (err: any) {
+            toast(err?.message ?? 'Gagal menghapus akun', 'error')
+          } finally {
+            setBusy(false)
+          }
+        }}
+      />
 
       <ImportWizard
         open={importOpen}

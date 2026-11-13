@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
-  Bell, Building2, CalendarDays, CheckCheck, ChevronDown, Home, LayoutGrid, LogOut, MapPinned,
+  AlarmClock, Bell, Building2, CalendarDays, CheckCheck, ChevronDown, Home, LayoutGrid, LogOut, MapPinned,
   MoreHorizontal, Settings, ShieldCheck, User as UserIcon, X,
 } from 'lucide-react'
 import { useApp } from '../lib/app-context'
@@ -52,6 +52,7 @@ export function AppShell() {
     if (path.endsWith('/projects')) return 'Katalog Proyek'
     if (path.endsWith('/locations')) return 'Peta Lokasi'
     if (path.endsWith('/calendar')) return 'Kalender'
+    if (path.endsWith('/reminders')) return 'Pengingat'
     if (path.endsWith('/admin')) return 'Administrasi'
     if (path.endsWith('/profile')) return 'Profil Saya'
     return 'Home'
@@ -72,6 +73,7 @@ export function AppShell() {
     { to: `/app/${entityKey}/projects`, label: 'Proyek', icon: LayoutGrid },
     { to: `/app/${entityKey}/locations`, label: 'Lokasi', icon: MapPinned },
     { to: `/app/${entityKey}/calendar`, label: 'Kalender', icon: CalendarDays },
+    { to: `/app/${entityKey}/reminders`, label: 'Pengingat', icon: AlarmClock },
   ]
   if (isAdmin) nav.push({ to: `/app/${entityKey}/admin`, label: 'Administrasi', icon: ShieldCheck })
 
@@ -165,6 +167,9 @@ export function AppShell() {
                 <Link to={`/app/${entityKey}/calendar`} className="hidden rounded-full p-2.5 text-muted hover:bg-sand hover:text-ink sm:block" title="Kalender">
                   <CalendarDays className="h-4 w-4" />
                 </Link>
+                <Link to={`/app/${entityKey}/reminders`} className="hidden rounded-full p-2.5 text-muted hover:bg-sand hover:text-ink sm:block" title="Pengingat">
+                  <AlarmClock className="h-4 w-4" />
+                </Link>
                 <div className="relative" ref={bellRef}>
                   <button
                     onClick={() => { setBellOpen((v) => !v); if (!bellOpen) refreshNotifications() }}
@@ -231,7 +236,7 @@ export function AppShell() {
       {/* Mobile bottom navigation */}
       <div className="fixed inset-x-0 bottom-0 z-[600] border-t border-line glass pb-[env(safe-area-inset-bottom)] lg:hidden">
         <div className="flex items-stretch">
-          {nav.slice(0, 4).map((item) => (
+          {nav.filter((item) => ['Home', 'Proyek', 'Kalender', 'Pengingat'].includes(item.label)).map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -255,6 +260,9 @@ export function AppShell() {
         <div className="space-y-2">
           <Link to={`/app/${entityKey}/calendar`} onClick={() => setMoreOpen(false)} className="nav-item border border-line">
             <CalendarDays className="h-4 w-4" /> Kalender & agenda
+          </Link>
+          <Link to={`/app/${entityKey}/reminders`} onClick={() => setMoreOpen(false)} className="nav-item border border-line">
+            <AlarmClock className="h-4 w-4" /> Pengingat & tenggat
           </Link>
           {isAdmin && (
             <Link to={`/app/${entityKey}/admin`} onClick={() => setMoreOpen(false)} className="nav-item border border-line">

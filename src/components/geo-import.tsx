@@ -80,7 +80,12 @@ export function GeoImportModal({
         projectId,
         visibility,
         source: fileName,
-        features: chosen.map((f) => ({ name: f.name, description: f.description, geometry: f.geometry })),
+        features: chosen.map((f) => ({
+          name: f.name,
+          description: f.description,
+          googleMapsUrl: f.googleMapsUrl,
+          geometry: f.geometry,
+        })),
       })
       toast(`${res.imported} lokasi berhasil diimpor.`)
       onImported(res.imported)
@@ -124,7 +129,7 @@ export function GeoImportModal({
         >
           <span className="grid h-10 w-10 place-items-center rounded-xl bg-white text-forest shadow-sm"><FileUp className="h-5 w-5" /></span>
           <span className="text-sm font-medium text-ink">{fileName || 'Pilih berkas KML / GeoJSON / CSV / XLSX'}</span>
-          <span className="text-[11px] text-muted">Titik, garis, dan area didukung.</span>
+          <span className="text-[11px] text-muted">Titik, garis, dan area didukung. Tautan Google Maps pada kolom gmaps/url atau deskripsi KML ikut diimpor.</span>
         </button>
         <input
           ref={inputRef}
@@ -156,6 +161,7 @@ export function GeoImportModal({
                     <th className="w-8 px-2 py-2" />
                     <th className="px-3 py-2 text-left font-semibold text-muted">Nama</th>
                     <th className="px-3 py-2 text-left font-semibold text-muted">Tipe</th>
+                    <th className="px-3 py-2 text-left font-semibold text-muted">Google Maps</th>
                     <th className="px-3 py-2 text-left font-semibold text-muted">Validasi</th>
                   </tr>
                 </thead>
@@ -174,6 +180,9 @@ export function GeoImportModal({
                         <span className="flex items-center gap-1.5 text-ink"><MapPin className="h-3 w-3 text-forest" /> {feature.name}</span>
                       </td>
                       <td className="px-3 py-1.5 uppercase text-muted">{feature.type}</td>
+                      <td className="px-3 py-1.5 text-[10px] text-muted">
+                        {feature.googleMapsUrl ? 'Tautan terdeteksi' : 'Koordinat otomatis'}
+                      </td>
                       <td className="px-3 py-1.5">
                         {feature.valid ? <span className="text-emerald-700">Siap</span> : <span className="text-red-700">{feature.reason}</span>}
                       </td>

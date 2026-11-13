@@ -133,7 +133,7 @@ projectRoutes.get('/projects/:id', async (c) => {
     q<any>(
       c.env.DB,
       `SELECT m.id AS membership_id, m.access, m.is_primary_pic, m.created_at AS joined_at,
-        u.id, u.name, u.email, u.role, u.job_title, u.avatar_id, u.entity_id
+        u.id, u.name, u.email, u.role, u.job_title, u.avatar_id, u.entity_id, u.is_active
        FROM project_members m JOIN users u ON u.id = m.user_id
        WHERE m.project_id = ? ORDER BY m.is_primary_pic DESC, u.name`,
       id,
@@ -329,6 +329,38 @@ projectRoutes.delete('/projects/:id/members/:memberId', async (c) => {
   })
   await audit(c.env, user, 'project.member_removed', 'project', id, `Mencabut akses ${target?.name ?? ''} dari ${project.title}`, project.entity_id)
   return c.json({ ok: true })
+})
+
+/**
+ * Project admins (PA) may deactivate/reactivate members of their own project.
+ * Permanent account deletion stays with MA/SA — never exposed here.
+ */
+projectRoutes.post('/projects/:id/members/:memberId/status', async (c) => {
+  const user = c.get('user')
+  const id = c.req.param('id')
+  const { project } = await requireProjectAdmin(c.env, user, id)
+  const membership = await one<any>(
+    c.env.DB,
+    `SELECT * FROM project_members WHERE id = ? AND project_id = ?`,
+    c.req.param('memberId'), id,
+  )
+  if (!membership) return c.json({ error: 'Keanggotaan tidak ditemukan.' }, 404)
+  const target = await one<any>(c.env.DB, `SELECT * FROM users WHERE id = ?`, membership.user_id)
+  if (!target) return c.json({ error: 'Pengguna tidak ditemukan.' }, 404)
+  if (target.id === user.id) return c.json({ error: 'Anda tidak dapat menonaktifkan akun sendiri.' }, 400)
+  if (target.role === 'MA' && user.role !== 'MA') {
+    throw new HttpError(403, 'Master Admin tidak dapat dinonaktifkan dari proyek.')
+  }
+  const body = await c.req.json().catch(() => ({}))
+  const active = body.active !== false
+  await run(c.env.DB, `UPDATE users SET is_active = ? WHERE id = ?`, active ? 1 : 0, target.id)
+  if (!active) await run(c.env.DB, `DELETE FROM sessions WHERE user_id = ?`, target.id)
+  await audit(
+    c.env, user, active ? 'user.reactivated' : 'user.deactivated', 'user', target.id,
+    `${active ? 'Mengaktifkan kembali' : 'Menonaktifkan'} ${target.name} pada ${project.title}`,
+    project.entity_id,
+  )
+  return c.json({ ok: true, is_active: active ? 1 : 0 })
 })
 
 projectRoutes.get('/projects/:id/members/candidates', async (c) => {

@@ -118,6 +118,31 @@ dataRoutes.patch('/data/records/:recordId', async (c) => {
   return c.json({ ok: true, record: { ...record, data: merged } })
 })
 
+dataRoutes.post('/data/records/bulk-delete', async (c) => {
+  const user = c.get('user')
+  const body = await c.req.json().catch(() => ({}))
+  const ids = (Array.isArray(body.ids) ? body.ids : []).map((id: any) => String(id)).filter(Boolean)
+  if (!ids.length) return c.json({ error: 'Tidak ada baris yang dipilih.' }, 400)
+  if (ids.length > 1000) return c.json({ error: 'Maksimum 1000 baris per tindakan.' }, 400)
+  let deleted = 0
+  const denied: string[] = []
+  const seen = new Set<string>()
+  for (const id of ids) {
+    if (seen.has(id)) continue
+    seen.add(id)
+    const record = await one<any>(c.env.DB, `SELECT * FROM data_records WHERE id = ?`, id)
+    if (!record) continue
+    const { project, member } = await loadProject(c.env, user, record.project_id)
+    if (!member && !isAdminOf(user, project, member)) { denied.push(id); continue }
+    await run(c.env.DB, `DELETE FROM data_records WHERE id = ?`, record.id)
+    deleted++
+  }
+  if (deleted) {
+    await audit(c.env, user, 'data.bulk_deleted', 'project', null, `Menghapus ${deleted} baris data sekaligus`, user.entity_id, { requested: ids.length, deleted, denied: denied.length })
+  }
+  return c.json({ deleted, denied })
+})
+
 dataRoutes.delete('/data/records/:recordId', async (c) => {
   const user = c.get('user')
   const record = await one<any>(c.env.DB, `SELECT * FROM data_records WHERE id = ?`, c.req.param('recordId'))

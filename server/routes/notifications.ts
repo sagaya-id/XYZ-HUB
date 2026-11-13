@@ -1,73 +1,54 @@
 import { Hono } from 'hono'
 import type { AppEnv } from '../ctx'
-import { one, q, run, uid, nowIso } from '../db'
-import { projectIdsForUser } from '../auth'
+import { q, run, uid, nowIso } from '../db'
+import { resolveEntity } from '../scope'
+import { buildAutoReminders, getLeadDays, jakartaToday } from '../reminders'
 
 export const notificationRoutes = new Hono<AppEnv>()
 
-const PREFS = ['task.assigned', 'task.due', 'calendar.created', 'calendar.updated', 'calendar.cancelled', 'project.assigned', 'project.pic', 'project.removed', 'budget.updated']
-
-function jakartaToday(): string {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit',
-  }).format(new Date())
-  return parts
-}
+const PREFS = [
+  'task.assigned', 'task.due', 'calendar.created', 'calendar.updated', 'calendar.cancelled',
+  'project.assigned', 'project.pic', 'project.removed', 'project.milestone', 'budget.updated',
+]
 
 /**
  * Time-based reminders are materialised on read (deduplicated by key).
  * No external cron is configured for this project, so reminders are produced
  * when a user next loads the app rather than pushed in the background.
+ * The reminder window follows each user's lead time (default 3 days).
  */
-async function materialiseReminders(env: any, user: any) {
+async function materialiseReminders(env: any, user: any, entity: any) {
+  const leadDays = await getLeadDays(env, user.id)
   const today = jakartaToday()
-  const in2Days = new Date(Date.now() + 2 * 86400_000).toISOString().slice(0, 10)
-  const dueTasks = await q<any>(
-    env.DB,
-    `SELECT t.id, t.title, t.due_date, t.project_id, p.title AS project_title, p.entity_id
-     FROM tasks t JOIN projects p ON p.id = t.project_id
-     WHERE t.assignee_id = ? AND t.due_date IS NOT NULL AND t.due_date >= ? AND t.due_date <= ?
-       AND t.completed_at IS NULL AND p.deleted_at IS NULL`,
-    user.id, today, in2Days,
-  )
-  for (const t of dueTasks) {
+  const items = await buildAutoReminders(env, user, entity, leadDays)
+  const typeFor = (source: string) =>
+    source === 'task' ? 'task.due' : source === 'project' ? 'project.milestone' : 'calendar.created'
+  for (const item of items) {
+    const type = typeFor(item.source)
+    const pref = await q<any>(
+      env.DB,
+      `SELECT enabled FROM notification_prefs WHERE user_id = ? AND type = ?`,
+      user.id, type,
+    )
+    if (pref[0] && pref[0].enabled === 0) continue
     try {
       await run(
         env.DB,
         `INSERT INTO notifications (id, user_id, type, title, body, link, entity_id, project_id, dedupe_key, created_at)
          VALUES (?,?,?,?,?,?,?,?,?,?)`,
-        uid('ntf_'), user.id, 'task.due', 'Tenggat tugas mendekat',
-        `${t.title} — ${t.project_title} (${t.due_date})`,
-        `/app/projects/${t.project_id}?tab=kanban`, t.entity_id, t.project_id,
-        `task-due:${t.id}:${t.due_date}`, nowIso(),
+        uid('ntf_'), user.id, type, item.title, item.body, item.link, entity.id, item.project_id,
+        `reminder:${item.id}:${today}`, nowIso(),
       )
-    } catch { /* duplicate */ }
-  }
-  const dates = await q<any>(
-    env.DB,
-    `SELECT e.id, e.title, e.start_local, e.project_id, e.entity_id FROM events e
-     JOIN projects p ON p.id = e.project_id
-     WHERE e.start_local >= ? AND e.start_local <= ? AND e.cancelled_at IS NULL
-       AND e.project_id IN (SELECT project_id FROM project_members WHERE user_id = ?)`,
-    today, in2Days + 'T23:59', user.id,
-  )
-  for (const e of dates) {
-    try {
-      await run(
-        env.DB,
-        `INSERT INTO notifications (id, user_id, type, title, body, link, entity_id, project_id, dedupe_key, created_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?)`,
-        uid('ntf_'), user.id, 'calendar.created', 'Pengingat agenda',
-        `${e.title} • ${e.start_local.replace('T', ' ')}`,
-        '/app/calendar', e.entity_id, e.project_id, `event-soon:${e.id}:${today}`, nowIso(),
-      )
-    } catch { /* duplicate */ }
+    } catch {
+      /* duplicate dedupe key — already reminded today */
+    }
   }
 }
 
 notificationRoutes.get('/notifications', async (c) => {
   const user = c.get('user')
-  await materialiseReminders(c.env, user)
+  const entity = await resolveEntity(c.env, c, user)
+  await materialiseReminders(c.env, user, entity)
   const rows = await q<any>(
     c.env.DB,
     `SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 60`,

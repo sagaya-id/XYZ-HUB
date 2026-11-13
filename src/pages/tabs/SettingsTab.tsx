@@ -88,6 +88,17 @@ export function SettingsTab({
     }
   }
 
+  // Project Admins may only deactivate/reactivate members of this project.
+  async function setMemberActive(member: Member, active: boolean) {
+    try {
+      await api.post(`/api/projects/${project.id}/members/${member.membership_id}/status`, { active })
+      toast(active ? `${member.name} diaktifkan kembali.` : `${member.name} dinonaktifkan.`)
+      reload()
+    } catch (err: any) {
+      toast(err?.message ?? 'Gagal mengubah status anggota', 'error')
+    }
+  }
+
   async function addKpi() {
     if (!kpiDraft.label.trim()) return
     setKpiSaving(true)
@@ -224,7 +235,10 @@ export function SettingsTab({
                     <div className="flex items-center gap-2">
                       <Avatar name={member.name} url={member.avatar_url} size={28} />
                       <div className="min-w-0">
-                        <p className="truncate text-xs font-medium text-ink">{member.name}</p>
+                        <p className="flex items-center gap-1.5 truncate text-xs font-medium text-ink">
+                          {member.name}
+                          {member.is_active === 0 && <span className="badge bg-red-50 text-[9px] text-red-700">Nonaktif</span>}
+                        </p>
                         <p className="truncate text-[10px] text-muted">{member.email}</p>
                       </div>
                     </div>
@@ -256,6 +270,14 @@ export function SettingsTab({
                   <td className="px-3 py-2.5 text-right">
                     {canManage && (
                       <div className="inline-flex items-center gap-1">
+                        {member.id !== me?.user.id && !(member.role === 'MA' && me?.user.role !== 'MA') && (
+                          <button
+                            className={cn('btn-ghost btn-sm', member.is_active === 0 ? '!text-forest' : '!text-amber-700')}
+                            onClick={() => setMemberActive(member, member.is_active === 0)}
+                          >
+                            {member.is_active === 0 ? 'Aktifkan' : 'Nonaktifkan'}
+                          </button>
+                        )}
                         {!member.is_primary_pic && (
                           <button className="btn-ghost btn-sm" onClick={() => setPrimaryPic(member)}>Jadikan PIC</button>
                         )}
@@ -275,6 +297,10 @@ export function SettingsTab({
         </div>
         <p className="mt-3 flex items-center gap-2 text-[10px] text-muted">
           <Users className="h-3 w-3" /> Menghapus anggota hanya mencabut akses. Catatan, logbook, foto, dan riwayat tugas tetap tersimpan.
+        </p>
+        <p className="mt-1 text-[10px] text-muted">
+          Project Admin dapat menonaktifkan atau mengaktifkan kembali anggota proyek ini. Penghapusan akun permanen hanya
+          tersedia untuk Master Admin dan Super Admin.
         </p>
       </section>
 

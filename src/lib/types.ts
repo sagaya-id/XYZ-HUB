@@ -103,6 +103,7 @@ export type Member = {
   role: Role
   access: 'admin' | 'member'
   is_primary_pic: number
+  is_active?: number
   job_title: string | null
   avatar_url: string | null
   joined_at: string
@@ -207,6 +208,8 @@ export type GeoLocation = {
   geojson: { type: string; coordinates: any }
   lon: number | null
   lat: number | null
+  google_maps_url: string | null
+  maps_url?: string | null
   visibility: 'team' | 'entity'
   photos?: { id: string; file_id: string; url: string; caption: string | null }[]
   logbook_count?: number
@@ -294,6 +297,21 @@ export type SheetLink = {
   worksheet: string | null
   last_sync_at: string | null
   status: string | null
+}
+
+export type ReminderSource = 'event' | 'task' | 'project' | 'manual'
+export type ReminderItem = {
+  id: string
+  source: ReminderSource
+  title: string
+  body: string | null
+  date: string
+  time: string | null
+  link: string | null
+  project_id: string | null
+  project_title?: string | null
+  urgent: boolean
+  done?: boolean
 }
 
 export type Notification = {
