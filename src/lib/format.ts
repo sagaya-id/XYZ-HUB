@@ -126,7 +126,15 @@ export function statusTone(status: string): { bg: string; text: string } {
 }
 
 export function priorityTone(priority: string): string {
+  if (priority === 'mendesak') return 'bg-red-600 text-white border border-red-700'
   if (priority === 'tinggi') return 'bg-red-50 text-red-700 border border-red-200'
   if (priority === 'rendah') return 'bg-slate-100 text-slate-600 border border-slate-200'
   return 'bg-amber-50 text-amber-700 border border-amber-200'
 }
+
+export const PRIORITY_OPTIONS: { value: string; label: string }[] = [
+  { value: 'rendah', label: 'Rendah' },
+  { value: 'normal', label: 'Normal' },
+  { value: 'tinggi', label: 'Tinggi' },
+  { value: 'mendesak', label: 'Mendesak' },
+]

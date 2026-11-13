@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import {
-  CalendarClock, CheckSquare, GripVertical, MessageSquare, Paperclip, Plus, Settings2,
-  Trash2, X,
+  useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent,
+} from 'react'
+import {
+  CalendarClock, Check, CheckSquare, Download, GripVertical, MessageSquare, Paperclip, Plus,
+  Settings2, Trash2, X,
 } from 'lucide-react'
 import { api, uploadFile } from '../lib/api'
 import type { Column, Task } from '../lib/types'
-import { formatDate, priorityTone, relativeTime } from '../lib/format'
+import { formatDate, PRIORITY_OPTIONS, priorityTone, relativeTime } from '../lib/format'
 import {
   Avatar, ConfirmDialog, Field, LoadingBlock, Modal, Spinner, cn,
 } from './ui'
@@ -13,26 +15,56 @@ import { useApp } from '../lib/app-context'
 
 type BoardResponse = { columns: Column[]; can_edit: boolean; done_column_ids: string[] }
 
-type DragState = { task: Task; fromColumn: string; x: number; y: number } | null
+const DRAG_THRESHOLD = 6
+const TOUCH_HOLD_MS = 240
+
+/** Immutable board transform used for the optimistic drag result. */
+function moveTaskInBoard(
+  board: BoardResponse,
+  taskId: string,
+  targetColumnId: string,
+  beforeTaskId: string | null,
+): BoardResponse | null {
+  const columns = board.columns.map((column) => ({ ...column, tasks: [...column.tasks] }))
+  const source = columns.find((column) => column.tasks.some((task) => task.id === taskId))
+  if (!source) return null
+  const taskIndex = source.tasks.findIndex((task) => task.id === taskId)
+  const [task] = source.tasks.splice(taskIndex, 1)
+  const target = columns.find((column) => column.id === targetColumnId)
+  if (!target) return null
+  const insertAt = beforeTaskId ? target.tasks.findIndex((item) => item.id === beforeTaskId) : -1
+  const moved: Task = {
+    ...task,
+    board_id: targetColumnId,
+    completed_at: target.is_done ? task.completed_at ?? new Date().toISOString() : null,
+  }
+  if (insertAt === -1) target.tasks.push(moved)
+  else target.tasks.splice(insertAt, 0, moved)
+  return { ...board, columns }
+}
 
 export function KanbanBoard({
   projectId, currentUserId, canEdit,
 }: { projectId: string; currentUserId: string; canEdit: boolean }) {
   const { toast } = useApp()
   const [board, setBoard] = useState<BoardResponse | null>(null)
+  const boardRef = useRef<BoardResponse | null>(null)
   const [loading, setLoading] = useState(true)
-  const [drag, setDrag] = useState<DragState>(null)
-  const dragRef = useRef<DragState>(null)
-  const pendingRef = useRef<any>(null)
+  const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null)
   const [detailTaskId, setDetailTaskId] = useState<string | null>(null)
   const [addTaskColumn, setAddTaskColumn] = useState<string | null>(null)
   const [columnModal, setColumnModal] = useState<{ mode: 'create' | 'edit'; column?: Column } | null>(null)
-  const [deleteColumn, setDeleteColumn] = useState<Column | null>(null)
+  const moveSeq = useRef(0)
+  const ghostRef = useRef<HTMLDivElement>(null)
+  const endDragRef = useRef<(() => void) | null>(null)
+
+  useEffect(() => { boardRef.current = board }, [board])
 
   const load = useCallback(async () => {
     try {
       const data = await api.get<BoardResponse>(`/api/projects/${projectId}/board`)
       setBoard(data)
+      boardRef.current = data
     } catch (err: any) {
       toast(err?.message ?? 'Gagal memuat papan', 'error')
     } finally {
@@ -42,64 +74,67 @@ export function KanbanBoard({
 
   useEffect(() => { load() }, [load])
 
-  useEffect(() => {
-    dragRef.current = drag
-  }, [drag])
+  // Never leave a ghost card or pointer listeners behind when the board unmounts.
+  useEffect(() => () => endDragRef.current?.(), [])
 
   const columns = board?.columns ?? []
   const editable = canEdit && (board?.can_edit ?? false)
 
-  const finishDrag = useCallback(async (x: number, y: number) => {
-    const state = dragRef.current
-    setDrag(null)
-    dragRef.current = null
-    if (!state) return
-    const ghost = document.getElementById('kanban-ghost')
-    if (ghost) ghost.style.display = 'none'
+  const paintDropTarget = useCallback((x: number, y: number) => {
     const el = document.elementFromPoint(x, y) as HTMLElement | null
-    const columnEl = el?.closest('[data-column-id]') as HTMLElement | null
-    if (!columnEl) return
-    const columnId = columnEl.dataset.columnId!
-    let beforeTaskId: string | null = null
-    if (el) {
-      const cardEl = el.closest('[data-task-id]') as HTMLElement | null
-      if (cardEl && cardEl.dataset.taskId !== state.task.id) {
-        const cards = Array.from(columnEl.querySelectorAll('[data-task-id]')) as HTMLElement[]
-        const rect = cardEl.getBoundingClientRect()
-        const after = y > rect.top + rect.height / 2
-        const index = cards.indexOf(cardEl)
-        beforeTaskId = after ? cards[index + 1]?.dataset.taskId ?? null : cardEl.dataset.taskId ?? null
-      }
-    }
-    try {
-      const res = await api.post<{ board: BoardResponse }>(`/api/tasks/${state.task.id}/move`, {
-        boardId: columnId,
-        beforeTaskId,
-      })
-      setBoard(res.board)
-    } catch (err: any) {
-      toast(err?.message ?? 'Gagal memindahkan tugas', 'error')
-    }
-  }, [toast])
+    const activeColumn = el?.closest('[data-column-id]') as HTMLElement | null
+    document.querySelectorAll('[data-column-id]').forEach((node) => {
+      node.classList.remove('ring-2', 'ring-forest/40', 'ring-offset-2')
+    })
+    if (activeColumn) activeColumn.classList.add('ring-2', 'ring-forest/40')
+  }, [])
 
-  // Pointer-based drag & drop (works with mouse, pen and long-press touch).
   const startDrag = useCallback((event: ReactPointerEvent, task: Task, columnId: string) => {
-    if (!editable || event.button === 2) return
+    if (!editable || event.button === 2 || endDragRef.current) return
     const startX = event.clientX
     const startY = event.clientY
     const pointerId = event.pointerId
     const isTouch = event.pointerType === 'touch'
+    const target = event.currentTarget as HTMLElement
     let activated = false
     let longPress = false
-    const target = event.currentTarget as HTMLElement
+    let frame = 0
+    let longPressTimer: number | null = null
+    let lastX = startX
+    let lastY = startY
+
+    const ghost = ghostRef.current
+
+    const removeListeners = () => {
+      if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null }
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', cancel)
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('blur', cancel)
+      if (frame) cancelAnimationFrame(frame)
+      frame = 0
+      target.style.touchAction = ''
+      if (ghost) ghost.style.display = 'none'
+    }
+
+    const endDrag = () => {
+      removeListeners()
+      endDragRef.current = null
+      setDraggingTaskId(null)
+      document.querySelectorAll('[data-column-id]').forEach((node) => {
+        node.classList.remove('ring-2', 'ring-forest/40', 'ring-offset-2')
+      })
+    }
 
     const activate = (x: number, y: number) => {
+      if (activated) return
       activated = true
-      const state = { task, fromColumn: columnId, x, y }
-      dragRef.current = state
-      setDrag(state)
-      const ghost = document.getElementById('kanban-ghost')
+      if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null }
+      target.style.touchAction = 'none'
+      setDraggingTaskId(task.id)
       if (ghost) {
+        ghost.textContent = task.title
         ghost.style.display = 'flex'
         ghost.style.left = `${x + 12}px`
         ghost.style.top = `${y + 8}px`
@@ -107,67 +142,115 @@ export function KanbanBoard({
       if (navigator.vibrate) navigator.vibrate(12)
     }
 
-    const timer = isTouch ? window.setTimeout(() => {
-      longPress = true
-      activate(startX, startY)
-    }, 240) : null
+    if (isTouch) {
+      longPressTimer = window.setTimeout(() => {
+        longPress = true
+        activate(startX, startY)
+      }, TOUCH_HOLD_MS)
+    }
 
-    const move = (ev: PointerEvent) => {
+    function schedule(x: number, y: number) {
+      lastX = x
+      lastY = y
+      if (frame) return
+      frame = requestAnimationFrame(() => {
+        frame = 0
+        if (ghost) {
+          ghost.style.left = `${lastX + 12}px`
+          ghost.style.top = `${lastY + 8}px`
+        }
+        paintDropTarget(lastX, lastY)
+      })
+    }
+
+    function move(ev: PointerEvent) {
       if (ev.pointerId !== pointerId) return
       const dx = ev.clientX - startX
       const dy = ev.clientY - startY
       if (!activated) {
-        if (Math.hypot(dx, dy) > 6) {
-          if (isTouch && !longPress) { cleanup(); return }
-          activate(ev.clientX, ev.clientY)
-        }
+        if (Math.hypot(dx, dy) <= DRAG_THRESHOLD) return
+        if (isTouch && !longPress) { endDrag(); return }
+        activate(ev.clientX, ev.clientY)
         return
       }
       ev.preventDefault()
-      const ghost = document.getElementById('kanban-ghost')
-      if (ghost) {
-        ghost.style.left = `${ev.clientX + 12}px`
-        ghost.style.top = `${ev.clientY + 8}px`
+      schedule(ev.clientX, ev.clientY)
+    }
+
+    function dropPoint(x: number, y: number) {
+      const el = document.elementFromPoint(x, y) as HTMLElement | null
+      const columnEl = el?.closest('[data-column-id]') as HTMLElement | null
+      if (!columnEl) return null
+      const columnId = columnEl.dataset.columnId!
+      let beforeTaskId: string | null = null
+      const cardEl = el?.closest('[data-task-id]') as HTMLElement | null
+      if (cardEl && cardEl.dataset.taskId !== task.id) {
+        const cards = Array.from(columnEl.querySelectorAll('[data-task-id]')) as HTMLElement[]
+        const rect = cardEl.getBoundingClientRect()
+        const after = y > rect.top + rect.height / 2
+        const index = cards.indexOf(cardEl)
+        beforeTaskId = after ? cards[index + 1]?.dataset.taskId ?? null : cardEl.dataset.taskId ?? null
       }
-      dragRef.current = { task, fromColumn: columnId, x: ev.clientX, y: ev.clientY }
-      setDrag({ task, fromColumn: columnId, x: ev.clientX, y: ev.clientY })
-      highlightColumn(ev.clientX, ev.clientY)
+      return { columnId, beforeTaskId }
     }
 
     const up = (ev: PointerEvent) => {
       if (ev.pointerId !== pointerId) return
-      cleanup()
-      if (activated) {
-        finishDrag(ev.clientX, ev.clientY)
-      } else {
-        // A simple tap/click (not a drag) opens the task detail sheet.
+      const wasActivated = activated
+      endDrag()
+      if (!wasActivated) {
+        // A plain click/tap opens the detail drawer; no drag state is left behind.
         setDetailTaskId(task.id)
+        return
       }
+      const drop = dropPoint(ev.clientX, ev.clientY)
+      if (!drop) return
+      const snapshot = boardRef.current
+      if (!snapshot) return
+      const optimistic = moveTaskInBoard(snapshot, task.id, drop.columnId, drop.beforeTaskId)
+      if (!optimistic) return
+      // Snap into place immediately, persist in the background.
+      setBoard(optimistic)
+      boardRef.current = optimistic
+      const token = ++moveSeq.current
+      api
+        .post<{ board: BoardResponse }>(`/api/tasks/${task.id}/move`, {
+          boardId: drop.columnId,
+          beforeTaskId: drop.beforeTaskId,
+        })
+        .then((res) => {
+          // Keep the optimistic order unless a newer drag landed in the meantime.
+          if (moveSeq.current === token) {
+            const next = { ...res.board, can_edit: optimistic.can_edit }
+            setBoard(next)
+            boardRef.current = next
+          }
+        })
+        .catch((err: any) => {
+          setBoard(snapshot)
+          boardRef.current = snapshot
+          toast(err?.message ?? 'Gagal memindahkan tugas', 'error')
+        })
     }
 
-    const cancel = () => { cleanup(); setDrag(null); dragRef.current = null }
-
-    function cleanup() {
-      if (timer) clearTimeout(timer)
-      window.removeEventListener('pointermove', move)
-      window.removeEventListener('pointerup', up)
-      window.removeEventListener('pointercancel', cancel)
-      target.style.touchAction = ''
+    function cancel() {
+      const wasActivated = activated
+      endDrag()
+      if (wasActivated) toast('Pemindahan tugas dibatalkan.', 'info')
     }
 
+    function onKeyDown(ev: KeyboardEvent) {
+      if (ev.key === 'Escape' && activated) cancel()
+    }
+
+    endDragRef.current = endDrag
     target.style.touchAction = isTouch ? 'pan-y' : ''
     window.addEventListener('pointermove', move, { passive: false })
     window.addEventListener('pointerup', up)
     window.addEventListener('pointercancel', cancel)
-    pendingRef.current = true
-  }, [editable, finishDrag])
-
-  function highlightColumn(x: number, y: number) {
-    document.querySelectorAll('[data-column-id]').forEach((el) => el.classList.remove('ring-2', 'ring-forest/40'))
-    const el = document.elementFromPoint(x, y) as HTMLElement | null
-    const column = el?.closest('[data-column-id]')
-    if (column) column.classList.add('ring-2', 'ring-forest/40')
-  }
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('blur', cancel)
+  }, [editable, paintDropTarget, toast])
 
   if (loading) return <LoadingBlock label="Memuat papan kanban…" />
 
@@ -189,7 +272,7 @@ export function KanbanBoard({
           <div
             key={column.id}
             data-column-id={column.id}
-            className="flex w-[276px] shrink-0 snap-start flex-col rounded-2xl border border-line bg-canvas/70 sm:w-[300px]"
+            className="flex w-[276px] shrink-0 snap-start flex-col rounded-2xl border border-line bg-canvas/70 transition-shadow sm:w-[300px]"
           >
             <div className="flex items-center justify-between gap-2 px-3.5 pt-3.5 pb-2">
               <div className="flex min-w-0 items-center gap-2">
@@ -199,6 +282,7 @@ export function KanbanBoard({
               </div>
               {editable && (
                 <button
+                  onPointerDown={(e) => e.stopPropagation()}
                   onClick={() => setColumnModal({ mode: 'edit', column })}
                   className="rounded-lg p-1.5 text-muted hover:bg-white hover:text-ink"
                   aria-label="Pengaturan kolom"
@@ -218,8 +302,8 @@ export function KanbanBoard({
                     onPointerDown={(e) => startDrag(e, task, column.id)}
                     onDoubleClick={() => setDetailTaskId(task.id)}
                     className={cn(
-                      'group relative cursor-grab touch-pan-y rounded-xl border border-line bg-white p-3 transition-shadow hover:shadow-[0_10px_24px_-16px_rgba(31,41,51,0.5)] active:cursor-grabbing',
-                      drag?.task.id === task.id && 'opacity-40',
+                      'group relative cursor-grab touch-pan-y rounded-xl border border-line bg-white p-3 transition-[box-shadow,opacity,transform] hover:shadow-[0_10px_24px_-16px_rgba(31,41,51,0.5)] active:cursor-grabbing',
+                      draggingTaskId === task.id && 'scale-[0.98] opacity-40',
                     )}
                   >
                     <div className="flex items-start gap-2">
@@ -271,6 +355,7 @@ export function KanbanBoard({
               })}
               {editable && (
                 <button
+                  onPointerDown={(e) => e.stopPropagation()}
                   onClick={() => setAddTaskColumn(column.id)}
                   className="flex items-center justify-center gap-1.5 rounded-xl border border-dashed border-line py-2 text-xs font-medium text-muted transition-colors hover:border-forest/30 hover:bg-white hover:text-forest"
                 >
@@ -284,12 +369,10 @@ export function KanbanBoard({
 
       {/* Drag ghost */}
       <div
-        id="kanban-ghost"
-        className="pointer-events-none fixed z-[2000] hidden max-w-[260px] items-center gap-2 rounded-xl border border-forest/30 bg-white px-3 py-2 text-[13px] font-medium text-ink shadow-[0_24px_48px_-24px_rgba(31,41,51,0.6)]"
+        ref={ghostRef}
+        className="pointer-events-none fixed z-[2000] hidden max-w-[260px] items-center gap-2 truncate rounded-xl border border-forest/30 bg-white px-3 py-2 text-[13px] font-medium text-ink shadow-[0_24px_48px_-24px_rgba(31,41,51,0.6)]"
         style={{ display: 'none' }}
-      >
-        {drag ? drag.task.title : ''}
-      </div>
+      />
 
       {addTaskColumn && (
         <TaskFormModal
@@ -321,29 +404,6 @@ export function KanbanBoard({
         />
       )}
 
-      <ConfirmDialog
-        open={!!deleteColumn}
-        title="Hapus kolom?"
-        description={
-          deleteColumn
-            ? `Kolom "${deleteColumn.name}" akan dihapus. ${deleteColumn.tasks.length} tugas di dalamnya dipindahkan ke kolom pertama.`
-            : ''
-        }
-        confirmLabel="Hapus kolom"
-        danger
-        onCancel={() => setDeleteColumn(null)}
-        onConfirm={async () => {
-          if (!deleteColumn) return
-          try {
-            await api.del(`/api/columns/${deleteColumn.id}`)
-            toast('Kolom dihapus.')
-            setDeleteColumn(null)
-            load()
-          } catch (err: any) {
-            toast(err?.message ?? 'Gagal menghapus kolom', 'error')
-          }
-        }}
-      />
     </div>
   )
 }
@@ -495,9 +555,7 @@ export function TaskFormModal({
         <div className="field-grid">
           <Field label="Prioritas">
             <select className="input" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}>
-              <option value="tinggi">Tinggi</option>
-              <option value="normal">Normal</option>
-              <option value="rendah">Rendah</option>
+              {PRIORITY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </Field>
           <Field label="Tenggat">
@@ -515,6 +573,8 @@ export function TaskFormModal({
   )
 }
 
+type SaveState = 'idle' | 'saving' | 'saved'
+
 function TaskDetail({
   taskId, columns, editable, onClose, onChanged,
 }: {
@@ -525,15 +585,18 @@ function TaskDetail({
   onClose: () => void
   onChanged: () => void
 }) {
-  const { toast } = useApp()
+  const { toast, me } = useApp()
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({ title: '', description: '', priority: 'normal', dueDate: '', assigneeId: '' })
+  const [saveState, setSaveState] = useState<SaveState>('idle')
   const [newCheck, setNewCheck] = useState('')
   const [comment, setComment] = useState('')
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [uploading, setUploading] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+  const formRef = useRef(form)
+  useEffect(() => { formRef.current = form }, [form])
 
   const load = useCallback(async () => {
     try {
@@ -555,59 +618,157 @@ function TaskDetail({
 
   useEffect(() => { load() }, [load])
 
-  async function save() {
-    setSaving(true)
-    try {
-      await api.patch(`/api/tasks/${taskId}`, { ...form, dueDate: form.dueDate || null, assigneeId: form.assigneeId || null })
-      toast('Tugas diperbarui.')
-      onChanged()
-    } catch (err: any) {
-      toast(err?.message ?? 'Gagal menyimpan', 'error')
-    } finally {
-      setSaving(false)
+  /** Persists any subset of task fields; keeps the drawer responsive. */
+  const persist = useCallback(async (patch: Partial<typeof form>, options: { silent?: boolean } = {}) => {
+    const next = { ...formRef.current, ...patch }
+    setForm(next)
+    if (!editable) return
+    if (!next.title.trim()) {
+      toast('Judul tugas tidak boleh kosong.', 'error')
+      load()
+      return
     }
-  }
+    setSaveState('saving')
+    try {
+      await api.patch(`/api/tasks/${taskId}`, {
+        title: next.title,
+        description: next.description,
+        priority: next.priority,
+        dueDate: next.dueDate || null,
+        assigneeId: next.assigneeId || null,
+      })
+      setSaveState('saved')
+      if (!options.silent) toast('Perubahan tugas disimpan.')
+      onChanged()
+      window.setTimeout(() => setSaveState('idle'), 1600)
+    } catch (err: any) {
+      setSaveState('idle')
+      toast(err?.message ?? 'Gagal menyimpan', 'error')
+      load()
+    }
+  }, [editable, load, onChanged, taskId, toast])
 
   async function addCheck() {
     if (!newCheck.trim()) return
-    await api.post(`/api/tasks/${taskId}/checklist`, { text: newCheck }).catch((e) => toast(e.message, 'error'))
-    setNewCheck('')
-    load()
-    onChanged()
+    try {
+      const res = await api.post<any>(`/api/tasks/${taskId}/checklist`, { text: newCheck.trim() })
+      // Instant feedback before the reload resolves.
+      setData((prev: any) => prev && ({
+        ...prev,
+        checklist: [...prev.checklist, { ...res.item, is_done: false }],
+      }))
+      setNewCheck('')
+      await load()
+      onChanged()
+    } catch (err: any) {
+      toast(err?.message ?? 'Gagal menambah item', 'error')
+    }
   }
 
   async function toggleCheck(item: any) {
-    // Subtask completion never changes the parent card's column.
-    await api.patch(`/api/checklist/${item.id}`, { isDone: !item.is_done }).catch((e) => toast(e.message, 'error'))
-    load()
-    onChanged()
+    const nextDone = !item.is_done
+    // Checklist completion never moves the parent card between columns.
+    setData((prev: any) => prev && ({
+      ...prev,
+      checklist: prev.checklist.map((row: any) => row.id === item.id ? { ...row, is_done: nextDone ? 1 : 0 } : row),
+    }))
+    try {
+      await api.patch(`/api/checklist/${item.id}`, { isDone: nextDone })
+      await load()
+      onChanged()
+    } catch (err: any) {
+      toast(err?.message ?? 'Gagal memperbarui checklist', 'error')
+      load()
+    }
+  }
+
+  async function renameCheck(item: any, text: string) {
+    const trimmed = text.trim()
+    if (!trimmed || trimmed === item.text) return
+    try {
+      await api.patch(`/api/checklist/${item.id}`, { text: trimmed })
+      setData((prev: any) => prev && ({
+        ...prev,
+        checklist: prev.checklist.map((row: any) => row.id === item.id ? { ...row, text: trimmed } : row),
+      }))
+      onChanged()
+    } catch (err: any) {
+      toast(err?.message ?? 'Gagal mengubah item', 'error')
+    }
+  }
+
+  async function removeCheck(item: any) {
+    setData((prev: any) => prev && ({ ...prev, checklist: prev.checklist.filter((row: any) => row.id !== item.id) }))
+    try {
+      await api.del(`/api/checklist/${item.id}`)
+      await load()
+      onChanged()
+    } catch (err: any) {
+      toast(err?.message ?? 'Gagal menghapus item', 'error')
+      load()
+    }
   }
 
   async function addComment() {
-    if (!comment.trim()) return
-    await api.post(`/api/tasks/${taskId}/comments`, { body: comment }).catch((e) => toast(e.message, 'error'))
-    setComment('')
-    load()
-    onChanged()
+    const body = comment.trim()
+    if (!body) return
+    try {
+      const res = await api.post<any>(`/api/tasks/${taskId}/comments`, { body })
+      setData((prev: any) => prev && ({
+        ...prev,
+        comments: [
+          { ...res.comment, user_name: me?.user.name ?? 'Anda', avatar_url: me?.user.avatar_url ?? null },
+          ...prev.comments,
+        ],
+      }))
+      setComment('')
+      await load()
+      onChanged()
+      toast('Komentar dikirim.')
+    } catch (err: any) {
+      toast(err?.message ?? 'Gagal mengirim komentar', 'error')
+    }
   }
 
-  async function attach(file: File | null) {
-    if (!file) return
+  async function attach(files: FileList | null) {
+    if (!files?.length || !data?.task) return
+    setUploading(true)
     try {
-      const uploaded = await uploadFile(file, { projectId: data?.task.project_id })
-      await api.post(`/api/tasks/${taskId}/attachments`, { fileId: uploaded.id })
-      toast('Lampiran ditambahkan.')
-      load()
+      for (const file of Array.from(files)) {
+        const uploaded = await uploadFile(file, { projectId: data.task.project_id })
+        await api.post(`/api/tasks/${taskId}/attachments`, { fileId: uploaded.id })
+      }
+      toast(files.length > 1 ? `${files.length} lampiran ditambahkan.` : 'Lampiran ditambahkan.')
+      await load()
+      onChanged()
     } catch (err: any) {
-      toast(err?.message ?? 'Gagal mengunggah', 'error')
+      toast(err?.message ?? 'Gagal mengunggah lampiran', 'error')
+    } finally {
+      setUploading(false)
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
+
+  async function removeAttachment(attachment: any) {
+    try {
+      await api.del(`/api/attachments/${attachment.id}`)
+      setData((prev: any) => prev && ({ ...prev, attachments: prev.attachments.filter((row: any) => row.id !== attachment.id) }))
+      onChanged()
+      toast('Lampiran dihapus.')
+    } catch (err: any) {
+      toast(err?.message ?? 'Gagal menghapus lampiran', 'error')
     }
   }
 
   async function moveTo(columnId: string) {
-    await api.post(`/api/tasks/${taskId}/move`, { boardId: columnId, beforeTaskId: null }).catch((e) => toast(e.message, 'error'))
-    toast('Tugas dipindahkan.')
-    load()
-    onChanged()
+    try {
+      await api.post(`/api/tasks/${taskId}/move`, { boardId: columnId, beforeTaskId: null })
+      toast('Tugas dipindahkan.')
+      await load()
+      onChanged()
+    } catch (err: any) {
+      toast(err?.message ?? 'Gagal memindahkan tugas', 'error')
+    }
   }
 
   const done = data?.checklist?.filter((c: any) => c.is_done).length ?? 0
@@ -615,39 +776,80 @@ function TaskDetail({
 
   return (
     <>
-      <Modal open onClose={onClose} size="lg" placement="right" title="Detail tugas">
+      <Modal
+        open
+        onClose={onClose}
+        size="lg"
+        placement="right"
+        title="Detail tugas"
+        description={editable ? 'Semua kolom dapat langsung diubah dan tersimpan otomatis.' : 'Anda hanya dapat melihat tugas ini.'}
+        footer={
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-[11px] text-muted">
+              {saveState === 'saving' ? 'Menyimpan…' : saveState === 'saved' ? 'Tersimpan' : 'Perubahan tersimpan otomatis'}
+            </span>
+            <div className="flex gap-2">
+              <button className="btn-secondary" onClick={onClose}>Tutup</button>
+              {editable && (
+                <button
+                  className="btn-primary"
+                  onClick={() => persist({ description: formRef.current.description, title: formRef.current.title })}
+                  disabled={saveState === 'saving'}
+                >
+                  {saveState === 'saving' ? <Spinner /> : <Check className="h-4 w-4" />} Simpan Perubahan
+                </button>
+              )}
+            </div>
+          </div>
+        }
+      >
         {loading ? <LoadingBlock /> : !data ? null : (
           <div className="space-y-5">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <input
-                  className="w-full border-0 bg-transparent p-0 text-lg font-semibold text-ink focus:outline-none"
+                  className="w-full rounded-lg border border-transparent bg-transparent px-1 py-0.5 text-lg font-semibold text-ink transition-colors hover:border-line focus:border-forest/40 focus:bg-white focus:outline-none disabled:hover:border-transparent"
                   value={form.title}
                   onChange={(e) => setForm({ ...form, title: e.target.value })}
+                  onBlur={() => { if (form.title.trim() && form.title !== data.task.title) persist({ title: form.title }) }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur() }
+                    if (e.key === 'Escape') setForm({ ...form, title: data.task.title })
+                  }}
                   disabled={!editable}
+                  aria-label="Judul tugas"
                 />
-                <p className="mt-1 text-xs text-muted">Dibuat {relativeTime(data.task.created_at)}</p>
+                <p className="mt-1 px-1 text-xs text-muted">Dibuat {relativeTime(data.task.created_at)} · klik judul untuk mengubah</p>
               </div>
-              {editable && (
-                <button className="btn-primary btn-sm" onClick={save} disabled={saving}>
-                  {saving && <Spinner />} Simpan
-                </button>
-              )}
             </div>
 
             <div className="field-grid">
               <Field label="Prioritas">
-                <select className="input" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} disabled={!editable}>
-                  <option value="tinggi">Tinggi</option>
-                  <option value="normal">Normal</option>
-                  <option value="rendah">Rendah</option>
+                <select
+                  className="input"
+                  value={form.priority}
+                  onChange={(e) => persist({ priority: e.target.value })}
+                  disabled={!editable}
+                >
+                  {PRIORITY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </select>
               </Field>
-              <Field label="Tenggat">
-                <input type="date" className="input" value={form.dueDate} onChange={(e) => setForm({ ...form, dueDate: e.target.value })} disabled={!editable} />
+              <Field label="Tenggat waktu">
+                <input
+                  type="date"
+                  className="input"
+                  value={form.dueDate}
+                  onChange={(e) => persist({ dueDate: e.target.value })}
+                  disabled={!editable}
+                />
               </Field>
               <Field label="Penanggung jawab">
-                <select className="input" value={form.assigneeId} onChange={(e) => setForm({ ...form, assigneeId: e.target.value })} disabled={!editable}>
+                <select
+                  className="input"
+                  value={form.assigneeId}
+                  onChange={(e) => persist({ assigneeId: e.target.value })}
+                  disabled={!editable}
+                >
                   <option value="">Belum ditugaskan</option>
                   {data.members.map((m: any) => <option key={m.id} value={m.id}>{m.name}</option>)}
                 </select>
@@ -666,38 +868,50 @@ function TaskDetail({
 
             <Field label="Deskripsi">
               <textarea
-                className="input min-h-[90px]"
+                className="input min-h-[110px]"
                 value={form.description}
                 onChange={(e) => setForm({ ...form, description: e.target.value })}
+                onBlur={() => { if (form.description !== (data.task.description ?? '')) persist({ description: form.description }, { silent: true }) }}
                 disabled={!editable}
-                placeholder="Belum ada deskripsi."
+                placeholder="Tambahkan detail, konteks, atau tautan…"
               />
             </Field>
 
             <div>
               <div className="mb-2 flex items-center justify-between">
                 <p className="text-sm font-semibold text-ink">Checklist</p>
-                <span className="text-xs text-muted">{done}/{total} selesai</span>
+                <span className={cn('text-xs', done === total && total > 0 ? 'font-semibold text-forest' : 'text-muted')}>{done}/{total} selesai</span>
               </div>
               <div className="space-y-1.5">
                 {data.checklist.map((item: any) => (
-                  <div key={item.id} className="group flex items-center gap-2 rounded-lg border border-line px-2.5 py-2">
+                  <div key={item.id} className="group flex items-center gap-2 rounded-lg border border-line px-2.5 py-1.5">
                     <input
                       type="checkbox"
                       checked={!!item.is_done}
                       onChange={() => toggleCheck(item)}
                       disabled={!editable}
-                      className="h-4 w-4 rounded border-line accent-[#245A46]"
+                      className="h-4 w-4 shrink-0 rounded border-line accent-[#245A46]"
                     />
-                    <span className={cn('flex-1 text-sm', item.is_done ? 'text-muted line-through' : 'text-ink')}>{item.text}</span>
+                    <input
+                      className={cn(
+                        'min-w-0 flex-1 rounded border border-transparent bg-transparent px-1 py-0.5 text-sm hover:border-line focus:border-forest/40 focus:bg-white focus:outline-none disabled:hover:border-transparent',
+                        item.is_done ? 'text-muted line-through' : 'text-ink',
+                      )}
+                      defaultValue={item.text}
+                      key={`${item.id}-${item.text}`}
+                      onBlur={(e) => renameCheck(item, e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                        if (e.key === 'Escape') { (e.target as HTMLInputElement).value = item.text; (e.target as HTMLInputElement).blur() }
+                      }}
+                      disabled={!editable}
+                      aria-label="Teks checklist"
+                    />
                     {editable && (
                       <button
-                        className="rounded p-1 text-muted opacity-0 group-hover:opacity-100 hover:text-red-600"
-                        onClick={async () => {
-                          await api.del(`/api/checklist/${item.id}`).catch((e) => toast(e.message, 'error'))
-                          load()
-                          onChanged()
-                        }}
+                        className="rounded p-1 text-muted opacity-60 hover:text-red-600 sm:opacity-0 sm:group-hover:opacity-100"
+                        onClick={() => removeCheck(item)}
+                        aria-label="Hapus item checklist"
                       >
                         <X className="h-3.5 w-3.5" />
                       </button>
@@ -713,29 +927,75 @@ function TaskDetail({
                     value={newCheck}
                     onChange={(e) => setNewCheck(e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter') addCheck() }}
-                    placeholder="Tambah subtugas…"
+                    placeholder="+ Tambah item checklist"
+                    aria-label="Tambah item checklist"
                   />
-                  <button className="btn-secondary" onClick={addCheck}><Plus className="h-4 w-4" /></button>
+                  <button className="btn-secondary shrink-0" onClick={addCheck} disabled={!newCheck.trim()}>
+                    <Plus className="h-4 w-4" /> Tambah
+                  </button>
                 </div>
               )}
             </div>
 
             <div>
-              <p className="mb-2 text-sm font-semibold text-ink">Lampiran</p>
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-sm font-semibold text-ink">Lampiran</p>
+                <span className="text-xs text-muted">{data.attachments.length} berkas</span>
+              </div>
               <div className="space-y-1.5">
-                {data.attachments.map((a: any) => (
-                  <a key={a.id} href={`/api/files/${a.file_id}`} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-lg border border-line px-2.5 py-2 text-xs text-ink hover:bg-canvas">
-                    <Paperclip className="h-3.5 w-3.5 text-muted" />
-                    <span className="flex-1 truncate">{a.file_name}</span>
-                  </a>
-                ))}
+                {data.attachments.map((a: any) => {
+                  const isImage = String(a.mime ?? '').startsWith('image/')
+                  return (
+                    <div key={a.id} className="flex items-center gap-2 rounded-lg border border-line px-2.5 py-2 text-xs">
+                      {isImage ? (
+                        <img src={`/api/files/${a.file_id}`} alt="" className="h-8 w-8 shrink-0 rounded-md border border-line object-cover" />
+                      ) : (
+                        <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted" />
+                      )}
+                      <a
+                        href={`/api/files/${a.file_id}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="min-w-0 flex-1 truncate text-ink hover:underline"
+                      >
+                        {a.file_name}
+                      </a>
+                      <a
+                        href={`/api/files/${a.file_id}`}
+                        download={a.file_name}
+                        className="rounded p-1 text-muted hover:bg-canvas hover:text-forest"
+                        aria-label="Unduh lampiran"
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                      </a>
+                      {editable && (
+                        <button
+                          className="rounded p-1 text-muted hover:text-red-600"
+                          onClick={() => removeAttachment(a)}
+                          aria-label="Hapus lampiran"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  )
+                })}
+                {data.attachments.length === 0 && <p className="text-xs text-muted">Belum ada lampiran.</p>}
               </div>
               {editable && (
                 <>
-                  <button className="btn-secondary btn-sm mt-2" onClick={() => fileRef.current?.click()}>
-                    <Paperclip className="h-3.5 w-3.5" /> Unggah lampiran
+                  <button className="btn-secondary btn-sm mt-2" onClick={() => fileRef.current?.click()} disabled={uploading}>
+                    {uploading ? <Spinner /> : <Paperclip className="h-3.5 w-3.5" />} Unggah Lampiran
                   </button>
-                  <input ref={fileRef} type="file" className="hidden" onChange={(e) => attach(e.target.files?.[0] ?? null)} />
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    multiple
+                    accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.json"
+                    className="hidden"
+                    onChange={(e) => attach(e.target.files)}
+                  />
+                  <p className="mt-1 text-[10px] text-muted">Gambar, PDF, dokumen, atau spreadsheet maks. 10 MB per berkas.</p>
                 </>
               )}
             </div>
@@ -747,23 +1007,28 @@ function TaskDetail({
                   <div key={c.id} className="flex gap-2.5">
                     <Avatar name={c.user_name} url={c.avatar_url} size={28} />
                     <div className="min-w-0 flex-1 rounded-xl bg-canvas px-3 py-2">
-                      <p className="text-xs font-medium text-ink">{c.user_name} <span className="font-normal text-muted">· {relativeTime(c.created_at)}</span></p>
+                      <p className="text-xs font-medium text-ink">
+                        {c.user_name} <span className="font-normal text-muted">· {relativeTime(c.created_at)}</span>
+                      </p>
                       <p className="mt-0.5 text-sm whitespace-pre-wrap text-ink">{c.body}</p>
                     </div>
                   </div>
                 ))}
                 {data.comments.length === 0 && <p className="text-xs text-muted">Belum ada komentar.</p>}
               </div>
-              <div className="mt-2 flex gap-2">
-                <input
-                  className="input"
-                  value={comment}
-                  onChange={(e) => setComment(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') addComment() }}
-                  placeholder="Tulis komentar…"
-                />
-                <button className="btn-secondary" onClick={addComment}>Kirim</button>
-              </div>
+              {editable && (
+                <div className="mt-2 flex gap-2">
+                  <input
+                    className="input"
+                    value={comment}
+                    onChange={(e) => setComment(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) addComment() }}
+                    placeholder="Tulis komentar…"
+                    aria-label="Tulis komentar"
+                  />
+                  <button className="btn-secondary shrink-0" onClick={addComment} disabled={!comment.trim()}>Kirim</button>
+                </div>
+              )}
             </div>
 
             {editable && (

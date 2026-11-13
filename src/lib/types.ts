@@ -46,6 +46,9 @@ export type BrandingEntity = {
   headline: string
   slogan: string
   description: string
+  homeHeadline?: string
+  homeSubtitle?: string
+  homeAnnouncement?: string
   cardPhotoFileId: string | null
   cardPhotoUrl: string
   bannerFileId: string | null
@@ -145,7 +148,7 @@ export type Task = {
   board_id: string
   title: string
   description: string | null
-  priority: 'tinggi' | 'normal' | 'rendah'
+  priority: 'mendesak' | 'tinggi' | 'normal' | 'rendah'
   due_date: string | null
   assignee_id: string | null
   assignee_name: string | null
@@ -231,6 +234,20 @@ export type Logbook = {
   photos: { id: string; file_id: string; url: string }[]
   created_at: string
   created_by: string | null
+}
+
+export type GalleryPhoto = {
+  id: string
+  project_id: string
+  file_id: string
+  url: string
+  photo_date: string
+  visibility: 'team' | 'entity'
+  created_by: string | null
+  created_at: string
+  uploader_name: string | null
+  uploader_avatar_url: string | null
+  can_delete: boolean
 }
 
 export type Note = {

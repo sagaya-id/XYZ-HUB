@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import {
-  ArrowDownUp, Download, FileSpreadsheet, History, Link2, Plus, RefreshCw, Table2, Trash2, Upload,
+  ArrowDownUp, ChevronDown, Download, FileSpreadsheet, Filter, History, Link2, Plus, RefreshCw,
+  Table2, Trash2, Upload, X,
 } from 'lucide-react'
 import { api } from '../../lib/api'
 import { useApp, useAsync } from '../../lib/app-context'
@@ -19,6 +20,72 @@ type DataResponse = {
   can_contribute: boolean
 }
 
+type ColumnFilter = { text: string; values: string[]; min: string; max: string; from: string; to: string }
+type FilterKind = 'text' | 'select' | 'number' | 'date'
+type ColumnMeta = { kind: FilterKind; options: string[] }
+
+const EMPTY_FILTER: ColumnFilter = { text: '', values: [], min: '', max: '', from: '', to: '' }
+
+function toNumber(value: string): number | null {
+  const stripped = value.trim().replace(/^rp\.?\s*/i, '')
+  if (!/^-?[\d.,]+$/.test(stripped)) return null
+  const cleaned = stripped.replace(/\.(?=\d{3}\b)/g, '').replace(',', '.')
+  if (!cleaned) return null
+  const num = Number(cleaned)
+  return Number.isFinite(num) ? num : null
+}
+
+/** Chooses the most useful filter control for a column from its values. */
+function buildMeta(field: DataField, records: DataRecord[]): ColumnMeta {
+  const values = records
+    .map((record) => record.data[field.key])
+    .filter((value) => value !== null && value !== undefined && String(value).trim() !== '')
+    .map((value) => String(value).trim())
+  const unique = Array.from(new Set(values))
+  const type = String(field.type ?? 'text').toLowerCase()
+  const ratio = (test: (value: string) => boolean) =>
+    values.length > 0 && values.filter(test).length / values.length >= 0.8
+  if (type === 'date' || ratio((value) => /^\d{4}-\d{2}-\d{2}/.test(value))) {
+    return { kind: 'date', options: unique }
+  }
+  if (type === 'number' || type === 'currency' || ratio((value) => toNumber(value) !== null)) {
+    return { kind: 'number', options: unique }
+  }
+  // Low-cardinality columns get a dropdown; a column of mostly-unique free text keeps a text input.
+  const categorical = unique.length <= 15 && unique.length <= Math.max(4, Math.ceil(records.length * 0.5))
+  if (categorical) {
+    return { kind: 'select', options: unique.sort((a, b) => a.localeCompare(b, 'id')) }
+  }
+  return { kind: 'text', options: [] }
+}
+
+function isFilterActive(filter: ColumnFilter, kind: FilterKind): boolean {
+  if (filter.text.trim()) return true
+  if (kind === 'select') return filter.values.length > 0
+  if (kind === 'number') return filter.min !== '' || filter.max !== ''
+  if (kind === 'date') return filter.from !== '' || filter.to !== ''
+  return false
+}
+
+function matchesFilter(record: DataRecord, field: DataField, filter: ColumnFilter, meta: ColumnMeta): boolean {
+  const text = String(record.data[field.key] ?? '')
+  if (filter.text.trim() && !text.toLowerCase().includes(filter.text.trim().toLowerCase())) return false
+  if (meta.kind === 'select' && filter.values.length > 0 && !filter.values.includes(text)) return false
+  if (meta.kind === 'number') {
+    const num = toNumber(text)
+    const min = filter.min === '' ? null : toNumber(filter.min)
+    const max = filter.max === '' ? null : toNumber(filter.max)
+    if (min !== null && (num === null || num < min)) return false
+    if (max !== null && (num === null || num > max)) return false
+  }
+  if (meta.kind === 'date') {
+    const day = text.slice(0, 10)
+    if (filter.from && (!day || day < filter.from)) return false
+    if (filter.to && (!day || day > filter.to)) return false
+  }
+  return true
+}
+
 export function DataTab({ project }: { project: ProjectDetail['project']; entityKey: string }) {
   const { toast } = useApp()
   const { data, loading, reload } = useAsync<DataResponse>(
@@ -26,6 +93,8 @@ export function DataTab({ project }: { project: ProjectDetail['project']; entity
     [project.id],
   )
   const [search, setSearch] = useState('')
+  const [filters, setFilters] = useState<Record<string, ColumnFilter>>({})
+  const [exportOpen, setExportOpen] = useState(false)
   const [sortKey, setSortKey] = useState<string>('')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [rowModal, setRowModal] = useState<{ record: DataRecord | null } | null>(null)
@@ -39,11 +108,40 @@ export function DataTab({ project }: { project: ProjectDetail['project']; entity
   const records = data?.records ?? []
   const canContribute = data?.can_contribute ?? false
 
+  const meta = useMemo(() => {
+    const map: Record<string, ColumnMeta> = {}
+    for (const field of fields) map[field.key] = buildMeta(field, records)
+    return map
+  }, [fields, records])
+
+  const activeFilters = useMemo(
+    () => fields.filter((field) => isFilterActive(filters[field.key] ?? EMPTY_FILTER, meta[field.key]?.kind ?? 'text')),
+    [fields, filters, meta],
+  )
+  const hasAnyFilter = activeFilters.length > 0 || !!search.trim()
+
+  function setFilter(key: string, patch: Partial<ColumnFilter>) {
+    setFilters((prev) => ({ ...prev, [key]: { ...(prev[key] ?? EMPTY_FILTER), ...patch } }))
+  }
+
+  function resetFilters() {
+    setFilters({})
+    setSearch('')
+  }
+
   const filtered = useMemo(() => {
     let rows = records
     if (search) {
       const term = search.toLowerCase()
       rows = rows.filter((record) => Object.values(record.data).some((value) => String(value).toLowerCase().includes(term)))
+    }
+    // Every active column filter is ANDed together, on top of the global search.
+    for (const field of fields) {
+      const filter = filters[field.key]
+      if (!filter) continue
+      const columnMeta = meta[field.key] ?? { kind: 'text' as FilterKind, options: [] }
+      if (!isFilterActive(filter, columnMeta.kind)) continue
+      rows = rows.filter((record) => matchesFilter(record, field, filter, columnMeta))
     }
     if (sortKey) {
       rows = [...rows].sort((a, b) => {
@@ -53,22 +151,23 @@ export function DataTab({ project }: { project: ProjectDetail['project']; entity
       })
     }
     return rows
-  }, [records, search, sortKey, sortDir])
+  }, [records, filters, meta, search, sortKey, sortDir, fields])
 
-  function exportCsv() {
+  function exportCsv(rows: DataRecord[], label: string) {
     const header = fields.map((f) => f.label)
     const lines = [header.join(',')]
-    for (const record of filtered) {
+    for (const record of rows) {
       lines.push(fields.map((f) => `"${String(record.data[f.key] ?? '').replace(/"/g, '""')}"`).join(','))
     }
     const blob = new Blob([`\uFEFF${lines.join('\n')}`], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `${project.code}-data-${new Date().toISOString().slice(0, 10)}.csv`
+    link.download = `${project.code}-data-${label}-${new Date().toISOString().slice(0, 10)}.csv`
     link.click()
     URL.revokeObjectURL(url)
-    toast('Ekspor CSV siap diunduh.')
+    setExportOpen(false)
+    toast(`Ekspor CSV (${rows.length} baris) siap diunduh.`)
   }
 
   if (loading) return <LoadingBlock label="Memuat tabel data…" />
@@ -82,7 +181,28 @@ export function DataTab({ project }: { project: ProjectDetail['project']; entity
             <p className="muted mt-0.5">Kolom kustom, impor Excel/CSV, dan sinkronisasi Google Sheets.</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button className="btn-secondary btn-sm" onClick={exportCsv}><Download className="h-3.5 w-3.5" /> Ekspor</button>
+            <div className="relative">
+              <button className="btn-secondary btn-sm" onClick={() => setExportOpen((open) => !open)} aria-expanded={exportOpen}>
+                <Download className="h-3.5 w-3.5" /> Ekspor <ChevronDown className="h-3 w-3" />
+              </button>
+              {exportOpen && (
+                <div className="absolute right-0 z-30 mt-1 w-56 rounded-xl border border-line bg-white p-1 shadow-[0_18px_40px_-20px_rgba(31,41,51,0.4)]">
+                  <button
+                    className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-xs text-ink hover:bg-canvas"
+                    onClick={() => exportCsv(records, 'semua')}
+                  >
+                    Ekspor semua baris <span className="text-muted">{records.length}</span>
+                  </button>
+                  <button
+                    className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-xs text-ink hover:bg-canvas disabled:opacity-40"
+                    onClick={() => exportCsv(filtered, 'terfilter')}
+                    disabled={!hasAnyFilter || filtered.length === 0}
+                  >
+                    Ekspor hasil filter <span className="text-muted">{filtered.length}</span>
+                  </button>
+                </div>
+              )}
+            </div>
             <button className="btn-secondary btn-sm" onClick={() => setHistoryOpen(true)}><History className="h-3.5 w-3.5" /> Riwayat</button>
             <button className="btn-secondary btn-sm" onClick={() => setSheetOpen(true)}><Link2 className="h-3.5 w-3.5" /> Google Sheets</button>
             {canContribute && (
@@ -98,6 +218,9 @@ export function DataTab({ project }: { project: ProjectDetail['project']; entity
           <SearchInput value={search} onChange={setSearch} placeholder="Cari di semua kolom…" className="w-full sm:w-72" />
           <span className="chip">{filtered.length} baris</span>
           <span className="chip">{fields.length} kolom</span>
+          {activeFilters.length > 0 && (
+            <span className="chip chip-active"><Filter className="h-3 w-3" /> {activeFilters.length} filter kolom</span>
+          )}
           {data?.sheet && (
             <span className={cn('chip', data.sheet.last_sync_at ? 'chip-active' : '')}>
               <Link2 className="h-3 w-3" /> {data.sheet.last_sync_at ? `Sinkron ${relativeTime(data.sheet.last_sync_at)}` : 'Sheet terhubung'}
@@ -115,12 +238,22 @@ export function DataTab({ project }: { project: ProjectDetail['project']; entity
         />
       ) : (
         <div className="card overflow-hidden">
+          {hasAnyFilter && (
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-forest-50/50 px-3 py-2">
+              <p className="text-xs text-ink">
+                Menampilkan <span className="font-semibold text-forest">{filtered.length}</span> dari {records.length} baris
+              </p>
+              <button className="btn-secondary btn-sm" onClick={resetFilters}>
+                <X className="h-3.5 w-3.5" /> Reset Semua Filter
+              </button>
+            </div>
+          )}
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] text-sm">
+            <table className="w-full min-w-[720px] text-sm">
               <thead className="bg-canvas/70">
                 <tr>
                   {fields.map((field) => (
-                    <th key={field.id} className="px-3 py-2.5 text-left">
+                    <th key={field.id} className="px-3 pt-2.5 pb-1 text-left align-bottom">
                       <button
                         className="inline-flex items-center gap-1 text-[11px] font-semibold tracking-wide text-muted uppercase hover:text-ink"
                         onClick={() => {
@@ -133,7 +266,91 @@ export function DataTab({ project }: { project: ProjectDetail['project']; entity
                       </button>
                     </th>
                   ))}
-                  <th className="px-3 py-2.5 text-right text-[11px] font-semibold tracking-wide text-muted uppercase">Aksi</th>
+                  <th className="px-3 pt-2.5 pb-1 text-right align-bottom text-[11px] font-semibold tracking-wide text-muted uppercase">Aksi</th>
+                </tr>
+                <tr className="border-t border-line/70">
+                  {fields.map((field) => {
+                    const columnMeta = meta[field.key] ?? { kind: 'text' as FilterKind, options: [] }
+                    const filter = filters[field.key] ?? EMPTY_FILTER
+                    const active = isFilterActive(filter, columnMeta.kind)
+                    const controlClass = cn(
+                      'w-full rounded-md border bg-white px-1.5 py-1 text-[11px] text-ink outline-none transition-colors placeholder:text-muted/70 focus:border-forest',
+                      active ? 'border-forest bg-forest-50/70 font-medium text-forest' : 'border-line',
+                    )
+                    return (
+                      <th key={`filter-${field.id}`} className="px-2 pb-2 font-normal">
+                        <div className="flex items-center gap-1">
+                          {columnMeta.kind === 'select' ? (
+                            <select
+                              className={controlClass}
+                              value={filter.values[0] ?? ''}
+                              onChange={(e) => setFilter(field.key, { values: e.target.value ? [e.target.value] : [] })}
+                              aria-label={`Filter ${field.label}`}
+                            >
+                              <option value="">Semua</option>
+                              {columnMeta.options.map((option) => (
+                                <option key={option} value={option}>{option}</option>
+                              ))}
+                            </select>
+                          ) : columnMeta.kind === 'number' ? (
+                            <div className="flex w-full items-center gap-1">
+                              <input
+                                className={controlClass}
+                                inputMode="decimal"
+                                value={filter.min}
+                                onChange={(e) => setFilter(field.key, { min: e.target.value })}
+                                placeholder="Min"
+                                aria-label={`Nilai minimum ${field.label}`}
+                              />
+                              <input
+                                className={controlClass}
+                                inputMode="decimal"
+                                value={filter.max}
+                                onChange={(e) => setFilter(field.key, { max: e.target.value })}
+                                placeholder="Maks"
+                                aria-label={`Nilai maksimum ${field.label}`}
+                              />
+                            </div>
+                          ) : columnMeta.kind === 'date' ? (
+                            <div className="flex w-full items-center gap-1">
+                              <input
+                                type="date"
+                                className={controlClass}
+                                value={filter.from}
+                                onChange={(e) => setFilter(field.key, { from: e.target.value })}
+                                aria-label={`Tanggal awal ${field.label}`}
+                              />
+                              <input
+                                type="date"
+                                className={controlClass}
+                                value={filter.to}
+                                onChange={(e) => setFilter(field.key, { to: e.target.value })}
+                                aria-label={`Tanggal akhir ${field.label}`}
+                              />
+                            </div>
+                          ) : (
+                            <input
+                              className={controlClass}
+                              value={filter.text}
+                              onChange={(e) => setFilter(field.key, { text: e.target.value })}
+                              placeholder="Filter…"
+                              aria-label={`Filter ${field.label}`}
+                            />
+                          )}
+                          {active && (
+                            <button
+                              className="shrink-0 rounded p-0.5 text-forest hover:bg-forest-50"
+                              onClick={() => setFilter(field.key, EMPTY_FILTER)}
+                              aria-label={`Hapus filter ${field.label}`}
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          )}
+                        </div>
+                      </th>
+                    )
+                  })}
+                  <th className="px-2 pb-2" />
                 </tr>
               </thead>
               <tbody>
@@ -158,10 +375,35 @@ export function DataTab({ project }: { project: ProjectDetail['project']; entity
                   </tr>
                 ))}
                 {filtered.length === 0 && (
-                  <tr><td colSpan={fields.length + 1} className="px-3 py-10 text-center text-sm text-muted">Tidak ada baris yang cocok.</td></tr>
+                  <tr>
+                    <td colSpan={fields.length + 1} className="px-3 py-4">
+                      <EmptyState
+                        icon={Filter}
+                        title="Tidak ada baris yang cocok"
+                        description={
+                          hasAnyFilter
+                            ? 'Tidak ada baris yang memenuhi kombinasi filter dan pencarian saat ini.'
+                            : 'Tabel ini belum memiliki baris data.'
+                        }
+                        action={
+                          hasAnyFilter ? (
+                            <button className="btn-primary" onClick={resetFilters}>
+                              <X className="h-4 w-4" /> Hapus Filter
+                            </button>
+                          ) : undefined
+                        }
+                      />
+                    </td>
+                  </tr>
                 )}
               </tbody>
             </table>
+          </div>
+          <div className="flex items-center justify-between border-t border-line px-3 py-2 text-[11px] text-muted">
+            <span>Menampilkan {filtered.length} dari {records.length} baris</span>
+            {activeFilters.length > 0 && (
+              <button className="font-medium text-forest hover:underline" onClick={resetFilters}>Reset Semua Filter</button>
+            )}
           </div>
         </div>
       )}
