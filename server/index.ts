@@ -12,6 +12,7 @@ import { taskRoutes } from './routes/tasks'
 import { eventRoutes } from './routes/events'
 import { locationRoutes } from './routes/locations'
 import { logbookRoutes } from './routes/logbooks'
+import { galleryRoutes } from './routes/gallery'
 import { budgetRoutes } from './routes/budget'
 import { noteRoutes } from './routes/notes'
 import { dataRoutes } from './routes/data'
@@ -104,6 +105,7 @@ app.route('/api', taskRoutes)
 app.route('/api', eventRoutes)
 app.route('/api', locationRoutes)
 app.route('/api', logbookRoutes)
+app.route('/api', galleryRoutes)
 app.route('/api', budgetRoutes)
 app.route('/api', noteRoutes)
 app.route('/api', dataRoutes)

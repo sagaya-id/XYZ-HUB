@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import {
-  Camera, ClipboardList, Crosshair, MapPin, Plus, Trash2, User,
+  Camera, ClipboardList, Crosshair, Images, MapPin, Plus, Trash2, User,
 } from 'lucide-react'
 import { api, uploadFile } from '../../lib/api'
 import { useApp, useAsync } from '../../lib/app-context'
@@ -8,7 +8,10 @@ import type { GeoLocation, Logbook, Member, ProjectDetail } from '../../lib/type
 import {
   Avatar, ConfirmDialog, EmptyState, Field, LoadingBlock, Modal, SearchInput, Spinner, VisibilityBadge, cn,
 } from '../../components/ui'
+import { ProjectGallery } from '../../components/project-gallery'
 import { formatDate, todayIso } from '../../lib/format'
+
+type LogbookView = 'log' | 'galeri'
 
 const ACTIVITY_TYPES = ['Monitoring', 'Kunjungan lapangan', 'Pelatihan', 'Rapat koordinasi', 'Serah terima', 'Inspeksi', 'Lainnya']
 
@@ -20,6 +23,7 @@ export function LogbookTab({
   const [locationFilter, setLocationFilter] = useState('')
   const [formOpen, setFormOpen] = useState<{ logbook: Logbook | null } | null>(null)
   const [deleting, setDeleting] = useState<Logbook | null>(null)
+  const [view, setView] = useState<LogbookView>('log')
 
   const { data, loading, reload } = useAsync<{ logbooks: Logbook[]; can_contribute: boolean }>(
     () => api.get(`/api/projects/${project.id}/logbooks`),
@@ -45,10 +49,40 @@ export function LogbookTab({
     onChanged()
   }
 
-  if (loading) return <LoadingBlock label="Memuat logbook lapangan…" />
-
   return (
     <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="inline-flex items-center gap-1 rounded-full border border-line bg-white p-1">
+          <button
+            type="button"
+            onClick={() => setView('log')}
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-medium transition-colors',
+              view === 'log' ? 'bg-forest text-white' : 'text-muted hover:text-ink',
+            )}
+          >
+            <ClipboardList className="h-3.5 w-3.5" /> Kegiatan
+          </button>
+          <button
+            type="button"
+            onClick={() => setView('galeri')}
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-medium transition-colors',
+              view === 'galeri' ? 'bg-forest text-white' : 'text-muted hover:text-ink',
+            )}
+          >
+            <Images className="h-3.5 w-3.5" /> Galeri
+          </button>
+        </div>
+        <p className="text-[11px] text-muted">Foto lapangan dikelompokkan per tanggal kegiatan.</p>
+      </div>
+
+      {view === 'galeri' ? (
+        <ProjectGallery project={project} />
+      ) : loading ? (
+        <LoadingBlock label="Memuat logbook lapangan…" />
+      ) : (
+        <>
       <div className="card p-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -138,6 +172,8 @@ export function LogbookTab({
             </article>
           ))}
         </div>
+      )}
+        </>
       )}
 
       {formOpen && (

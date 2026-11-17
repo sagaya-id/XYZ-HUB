@@ -19,8 +19,10 @@ Antarmuka berbahasa Indonesia, zona waktu **Asia/Jakarta**, mata uang **IDR**.
 | **Peta GIS** | Leaflet + tile OpenStreetMap berlisensi, marker cluster, popup, foto, garis & poligon, impor KML/GeoJSON/koordinat dengan pratinjau + validasi, riwayat monitoring per lokasi, peta proyek dan peta entitas. |
 | **Kalender** | Tampilan Hari / Minggu / Bulan / Tahun, agenda tampil di dalam sel tanggal (`08.00 Monitoring Lapangan`), `+N lagi`, kategori & warna kustom, filter proyek, agenda khusus tim vs entitas, hari libur opsional, satu kalender per entitas. |
 | **Tabel data** | Kolom kustom, pencarian/filter/urut, edit sel, impor CSV/XLS/XLSX (pilih sheet, pratinjau, pemetaan kolom, validasi, dedupe, Append/Update/Skip), ekspor CSV, riwayat impor, sinkronisasi Google Sheets manual dengan pratinjau konflik. |
-| **Logbook** | Entri ramah ponsel: proyek, lokasi, tanggal, staf, aktivitas, observasi, indikator kustom, foto, GPS, tindak lanjut. Riwayat tetap utuh saat anggota dikeluarkan. |
+| **Logbook** | Dua sub-tab: **Log Kegiatan** (entri kunjungan: proyek, lokasi, tanggal, staf, aktivitas, observasi, indikator kustom, foto, GPS, tindak lanjut) dan **Galeri** (unggah banyak foto dengan tanggal pilihan, dikelompokkan otomatis per tanggal terbaru, lightbox, unduh, hapus). Riwayat tetap utuh saat anggota dikeluarkan. |
 | **Anggaran** | Nominal anggaran + centang **Anggaran Sudah Pasti**. Nominal belum pasti tersimpan tetapi tidak dihitung pada total resmi/grafik. Perubahan nominal pasti memerlukan konfirmasi ulang, lengkap dengan riwayat perubahan. |
+| **Obrolan tim** | Pesan langsung antar anggota entitas, lampiran privat, tanda belum dibaca, notifikasi percakapan. |
+| **Pengingat** | Daftar pengingat per entitas (agenda otomatis + manual), hierarki akun. |
 | **Notifikasi** | Persisten, terdeduplikasi, belum/sudah dibaca, preferensi, tautan langsung ke objek. |
 | **Administrasi** | Undang pengguna (manual & impor CSV/XLS/XLSX dengan pratinjau), atur peran/entitas, nonaktifkan, editor branding (global + per entitas), audit log. |
 | **Privasi** | `Khusus Tim` / `Entitas` untuk proyek, anggaran, agenda, data, peta, catatan, logbook, lampiran. Visibilitas ≠ hak edit — keduanya ditegakkan di server. |

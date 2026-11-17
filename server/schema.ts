@@ -183,6 +183,15 @@ export const SCHEMA: string[] = [
     file_id TEXT NOT NULL,
     created_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS gallery_photos (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    file_id TEXT NOT NULL,
+    photo_date TEXT NOT NULL,
+    visibility TEXT NOT NULL DEFAULT 'team' CHECK (visibility IN ('team','entity')),
+    created_by TEXT,
+    created_at TEXT NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS budgets (
     project_id TEXT PRIMARY KEY,
     amount REAL NOT NULL DEFAULT 0,
@@ -370,6 +379,7 @@ export const SCHEMA: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_locations_project ON locations(project_id)`,
   `CREATE INDEX IF NOT EXISTS idx_logbooks_project ON logbooks(project_id, visit_date)`,
+  `CREATE INDEX IF NOT EXISTS idx_gallery_project ON gallery_photos(project_id, photo_date)`,
   `CREATE INDEX IF NOT EXISTS idx_records_project ON data_records(project_id)`,
   `CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_reminders_user ON reminders(user_id, remind_at)`,

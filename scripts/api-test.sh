@@ -162,7 +162,33 @@ check "removed member blocked" "403" "$(code dimas GET /api/projects/prj_p1)"
 check "logbooks preserved after removal" "$LOGBOOKS_BEFORE" "$(req sa GET /api/projects/prj_p1/logbooks | j logbooks.length)"
 check "removed member still has own historical records" "true" "$(req sa GET /api/projects/prj_p1/logbooks | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const o=JSON.parse(d);console.log(o.logbooks.some(l=>l.staff_id==='usr_dimas'||l.created_by==='usr_dimas')?'true':'false')})")"
 
-echo "== 13. Cleanup test artefacts =="
+echo "== 13. Galeri foto proyek =="
+printf 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' | base64 -d > "$TMP/tiny.png"
+GAL_FILE=$(curl -s -b "$TMP/rina.jar" -F "file=@$TMP/tiny.png;type=image/png" -F "projectId=prj_p1" "$BASE/api/files" | j file.id)
+check "gallery photo stored in file storage" "true" "$([ -n "$GAL_FILE" ] && [ "$GAL_FILE" != "undefined" ] && echo true || echo false)"
+GAL_NEW=$(req rina POST /api/projects/prj_p1/gallery "{\"date\":\"2026-11-10\",\"fileIds\":[\"$GAL_FILE\"]}")
+GAL_OLD_A=$(req rina POST /api/projects/prj_p1/gallery "{\"date\":\"2026-11-08\",\"fileIds\":[\"$GAL_FILE\"]}")
+GAL_OLD_B=$(req rina POST /api/projects/prj_p1/gallery "{\"date\":\"2026-11-08\",\"fileIds\":[\"$GAL_FILE\"]}")
+check "gallery upload newer date" "1" "$(echo "$GAL_NEW" | j ids.length)"
+check "gallery upload earlier date" "1" "$(echo "$GAL_OLD_A" | j ids.length)"
+check "gallery second upload on same date" "1" "$(echo "$GAL_OLD_B" | j ids.length)"
+GAL_LIST=$(req rina GET /api/projects/prj_p1/gallery)
+check "gallery groups newest date first" "2026-11-10,2026-11-08" "$(echo "$GAL_LIST" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const o=JSON.parse(d);console.log([...new Set(o.photos.map(p=>p.photo_date))].join(','))})")"
+check "gallery merges uploads into one date group" "2" "$(echo "$GAL_LIST" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const o=JSON.parse(d);console.log(o.photos.filter(p=>p.photo_date==='2026-11-08').length)})")"
+check "gallery photo file fetchable" "200" "$(code rina GET "/api/files/$GAL_FILE")"
+check "gallery photo has delete permission flag" "true" "$(echo "$GAL_LIST" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const o=JSON.parse(d);console.log(o.photos.every(p=>p.can_delete===true)?'true':'false')})")"
+check "gallery blocked for other entity" "403" "$(code sb GET /api/projects/prj_p1/gallery)"
+check "non-member cannot add gallery photo" "403" "$(code dewi POST /api/projects/prj_p1/gallery "{\"date\":\"2026-11-08\",\"fileIds\":[\"$GAL_FILE\"]}")"
+GAL_OLD_ID=$(echo "$GAL_OLD_A" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{console.log(JSON.parse(d).ids[0])})")
+check "non-owner member cannot delete gallery photo" "403" "$(code siti DELETE "/api/gallery/$GAL_OLD_ID")"
+check "uploader can delete gallery photo" "200" "$(code rina DELETE "/api/gallery/$GAL_OLD_ID")"
+GAL_AFTER=$(req rina GET /api/projects/prj_p1/gallery)
+check "deleted photo removed from gallery" "1" "$(echo "$GAL_AFTER" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const o=JSON.parse(d);console.log(o.photos.filter(p=>p.photo_date==='2026-11-08').length)})")"
+check "gallery persists photos after reload" "2" "$(echo "$GAL_AFTER" | j photos.length)"
+GAL_CLEAN=$(echo "$GAL_AFTER" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const o=JSON.parse(d);console.log(o.photos.map(p=>p.id).join(' '))})")
+for gid in $GAL_CLEAN; do code ma DELETE "/api/gallery/$gid" > /dev/null; done
+
+ echo "== 14. Cleanup test artefacts =="
 check "removed member cannot move tasks" "403" "$(code dimas POST "/api/tasks/$TASK_ID/move" "{\"boardId\":\"$TARGET_COL\"}")"
 check "archive test project" "200" "$(code sa POST "/api/projects/$NEW_ID/archive" '{"archived":true}')"
 check "delete test project (soft)" "200" "$(code sa DELETE "/api/projects/$NEW_ID")"
