@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react'
 import L from 'leaflet'
 import 'leaflet.markercluster'
+import { MARKER_DEFAULT_COLOR } from './marker-style'
+import { stripHtmlToText } from '../lib/text'
 import type { GeoLocation } from '../lib/types'
 import { cn } from './ui'
 
@@ -43,18 +45,57 @@ function appendMapsLink(container: HTMLElement, location: GeoLocation) {
   container.appendChild(link)
 }
 
-function pointIcon(index: number) {
+/**
+ * Clean Google-Maps-style teardrop pin (no numbers). A custom icon renders as a
+ * round badge with a border in the selected colour.
+ */
+/** Grouped pins keep the same clean look: no numbers inside the cluster. */
+function clusterIcon(children: any[], fallbackColor: string) {
+  const style = children[0]?.xyzStyle ?? { color: fallbackColor, iconUrl: null }
+  if (style.iconUrl) {
+    return L.divIcon({
+      html: `<div class="xyz-pin-badge xyz-cluster-badge" style="border-color:${style.color}"><img src="${style.iconUrl}" alt="" /></div>`,
+      className: 'xyz-marker xyz-cluster',
+      iconSize: [38, 38],
+      iconAnchor: [19, 19],
+    })
+  }
   return L.divIcon({
-    html: `<div class="xyz-pin"><span>${index}</span></div>`,
+    html: `<svg class="xyz-pin-svg xyz-cluster-pin" width="34" height="42" viewBox="0 0 26 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M13 0C5.82 0 0 5.82 0 13c0 9.02 11.19 18.02 11.79 18.48a2 2 0 0 0 2.42 0C14.81 31.02 26 22.02 26 13 26 5.82 20.18 0 13 0Z" fill="${style.color}" />
+      <circle cx="13" cy="12.6" r="7.4" fill="none" stroke="#FFFFFF" stroke-width="1.4" opacity="0.9" />
+      <circle cx="13" cy="12.6" r="4.9" fill="#FFFFFF" />
+    </svg>`,
+    className: 'xyz-marker xyz-cluster',
+    iconSize: [34, 42],
+    iconAnchor: [17, 40],
+  })
+}
+
+function markerIcon(color: string, iconUrl?: string | null) {
+  if (iconUrl) {
+    return L.divIcon({
+      html: `<div class="xyz-pin-badge" style="border-color:${color}"><img src="${iconUrl}" alt="" /></div>`,
+      className: 'xyz-marker',
+      iconSize: [32, 32],
+      iconAnchor: [16, 16],
+      popupAnchor: [0, -18],
+    })
+  }
+  return L.divIcon({
+    html: `<svg class="xyz-pin-svg" width="26" height="32" viewBox="0 0 26 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M13 0C5.82 0 0 5.82 0 13c0 9.02 11.19 18.02 11.79 18.48a2 2 0 0 0 2.42 0C14.81 31.02 26 22.02 26 13 26 5.82 20.18 0 13 0Z" fill="${color}" />
+      <circle cx="13" cy="12.6" r="4.9" fill="#FFFFFF" />
+    </svg>`,
     className: 'xyz-marker',
-    iconSize: [30, 30],
-    iconAnchor: [15, 28],
-    popupAnchor: [0, -26],
+    iconSize: [26, 32],
+    iconAnchor: [13, 30],
+    popupAnchor: [0, -28],
   })
 }
 
 export function ProjectMap({
-  locations, className, height = 420, tileUrl, attribution, activeId, onSelect, center, zoom = 5, color = '#245A46',
+  locations, className, height = 420, tileUrl, attribution, activeId, onSelect, center, zoom = 5, color = MARKER_DEFAULT_COLOR,
 }: MapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<L.Map | null>(null)
@@ -85,7 +126,12 @@ export function ProjectMap({
     const resize = () => map.invalidateSize()
     setTimeout(resize, 120)
     window.addEventListener('resize', resize)
+    // Layout changes (breakpoint switch, sidebar collapse) resize the container
+    // without a window resize event, so watch the element itself.
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(resize) : null
+    observer?.observe(containerRef.current)
     return () => {
+      observer?.disconnect()
       window.removeEventListener('resize', resize)
       map.remove()
       mapRef.current = null
@@ -114,28 +160,32 @@ export function ProjectMap({
     if (!map || !layer) return
     layer.clearLayers()
 
+    // Dense pins group together; clicking a group zooms into its bounds, and a
+    // group at max zoom spiderfies. Clusters never show a count.
     const cluster = (L as any).markerClusterGroup({
       showCoverageOnHover: false,
       maxClusterRadius: 46,
+      zoomToBoundsOnClick: true,
       spiderfyOnMaxZoom: true,
-      iconCreateFunction: (c: any) =>
-        L.divIcon({
-          html: `<div>${c.getChildCount()}</div>`,
-          className: 'marker-cluster marker-cluster-small',
-          iconSize: L.point(40, 40),
-        }),
+      removeOutsideVisibleBounds: true,
+      animate: true,
+      iconCreateFunction: (c: any) => clusterIcon(c.getAllChildMarkers(), color),
     })
     const bounds: L.LatLngExpression[] = []
-    let index = 0
+    let pointCount = 0
 
     for (const loc of locations) {
       if (!loc.geojson?.coordinates) continue
       const geo = loc.geojson
       if (loc.type === 'point' && geo.type === 'Point') {
-        index++
         const [lng, lat] = geo.coordinates as [number, number]
         if (typeof lat !== 'number' || typeof lng !== 'number') continue
-        const marker = L.marker([lat, lng], { icon: pointIcon(index), title: loc.name })
+        const pinColor = loc.marker_color || color
+        const marker = L.marker([lat, lng], {
+          icon: markerIcon(pinColor, loc.marker_icon_url ?? null),
+          title: loc.name,
+        })
+        ;(marker as any).xyzStyle = { color: pinColor, iconUrl: loc.marker_icon_url ?? null }
         const popup = document.createElement('div')
         popup.className = 'min-w-[170px]'
         const title = document.createElement('p')
@@ -148,10 +198,11 @@ export function ProjectMap({
           project.textContent = loc.project_title
           popup.appendChild(project)
         }
-        if (loc.description) {
+        const description = stripHtmlToText(loc.description)
+        if (description) {
           const desc = document.createElement('p')
-          desc.className = 'mt-1 text-[11px] leading-snug text-muted'
-          desc.textContent = loc.description
+          desc.className = 'mt-1 whitespace-pre-line text-[11px] leading-snug text-muted'
+          desc.textContent = description
           popup.appendChild(desc)
         }
         if (selectRef.current) {
@@ -165,6 +216,7 @@ export function ProjectMap({
         appendMapsLink(popup, loc)
         marker.bindPopup(popup)
         cluster.addLayer(marker)
+        pointCount += 1
         bounds.push([lat, lng])
       } else {
         const feature = L.geoJSON(geo as any, {
@@ -198,9 +250,7 @@ export function ProjectMap({
       }
     }
 
-    if (index > 0) {
-      layer.addLayer(cluster)
-    }
+    if (pointCount > 0) layer.addLayer(cluster)
 
     if (bounds.length > 0 && locations.length > 0) {
       const fits = L.latLngBounds(bounds)

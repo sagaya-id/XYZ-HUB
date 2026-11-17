@@ -3,7 +3,7 @@ import {
   ArrowUpRight, CalendarDays, CheckSquare, ClipboardList, Coins, FolderOpen, MapPin, Users,
 } from 'lucide-react'
 import { api } from '../lib/api'
-import { useAsync } from '../lib/app-context'
+import { useApp, useAsync } from '../lib/app-context'
 import { formatDate, compactRupiah, formatTime, number, relativeTime, rupiah, todayIso } from '../lib/format'
 import { AreaChart, BarChart, DonutChart } from '../components/charts'
 import { Avatar, LoadingBlock, PageHeader, ProgressBar, Stat, cn } from '../components/ui'
@@ -32,17 +32,20 @@ type HomeData = {
 export function HomePage() {
   const { entity } = useParams<{ entity: string }>()
   const { data, loading } = useAsync<HomeData>(() => api.get(`/api/home?entity=${entity}`), [entity])
+  const { me } = useApp()
 
   if (loading || !data) return <LoadingBlock label="Menyiapkan ringkasan proyek…" />
 
   const { stats, charts, agenda } = data
-  const greeting = greetingForNow()
+  const timeOfDay = timeOfDayForNow()
+  const firstName = me?.user?.name?.trim().split(/\s+/)[0]
+  const greeting = firstName ? `Selamat ${timeOfDay}, ${firstName}` : `Selamat ${timeOfDay}`
 
   return (
     <div className="space-y-5">
       <PageHeader
         eyebrow={`${data.entity.name} · ${formatDate(todayIso(), 'long')}`}
-        title={`${greeting} — ini ringkasan hari ini.`}
+        title={greeting}
         description="Pantau proyek, agenda, dan tim dalam satu tampilan. Semua angka diambil dari catatan proyek yang tersimpan."
         actions={
           <>
@@ -219,10 +222,10 @@ export function HomePage() {
   )
 }
 
-function greetingForNow(): string {
+function timeOfDayForNow(): string {
   const hour = Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jakarta', hour: '2-digit', hour12: false }).format(new Date()))
-  if (hour < 11) return 'Selamat pagi'
-  if (hour < 15) return 'Selamat siang'
-  if (hour < 18) return 'Selamat sore'
-  return 'Selamat malam'
+  if (hour < 11) return 'pagi'
+  if (hour < 15) return 'siang'
+  if (hour < 18) return 'sore'
+  return 'malam'
 }

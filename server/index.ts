@@ -38,15 +38,22 @@ async function boot(env: Env) {
           console.error('schema statement failed', err)
         }
       }
-      // Additive migration for databases created before the Google Maps column.
-      try {
-        const columns = await q<any>(env.DB, `PRAGMA table_info(locations)`)
-        if (columns.length && !columns.some((column: any) => column.name === 'google_maps_url')) {
-          await run(env.DB, `ALTER TABLE locations ADD COLUMN google_maps_url TEXT`)
+      // Additive migrations for databases created before these columns existed.
+      const addColumn = async (table: string, column: string, ddl: string) => {
+        try {
+          const columns = await q<any>(env.DB, `PRAGMA table_info(${table})`)
+          if (columns.length && !columns.some((item: any) => item.name === column)) {
+            await run(env.DB, `ALTER TABLE ${table} ADD COLUMN ${ddl}`)
+          }
+        } catch (err) {
+          console.error(`${table}.${column} migration failed`, err)
         }
-      } catch (err) {
-        console.error('locations migration failed', err)
       }
+      await addColumn('locations', 'google_maps_url', 'google_maps_url TEXT')
+      await addColumn('projects', 'marker_color', 'marker_color TEXT')
+      await addColumn('projects', 'marker_icon_id', 'marker_icon_id TEXT')
+      await addColumn('locations', 'marker_color', 'marker_color TEXT')
+      await addColumn('locations', 'marker_icon_id', 'marker_icon_id TEXT')
       await ensureSeed(env)
       await ensureChatSeed(env)
       await ensureChatInfra(env)

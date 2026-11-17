@@ -48,6 +48,8 @@ export const SCHEMA: string[] = [
     start_date TEXT,
     end_date TEXT,
     visibility TEXT NOT NULL DEFAULT 'team' CHECK (visibility IN ('team','entity')),
+    marker_color TEXT,
+    marker_icon_id TEXT,
     archived_at TEXT,
     deleted_at TEXT,
     created_by TEXT,
@@ -150,6 +152,8 @@ export const SCHEMA: string[] = [
     lat REAL,
     visibility TEXT NOT NULL DEFAULT 'entity' CHECK (visibility IN ('team','entity')),
     google_maps_url TEXT,
+    marker_color TEXT,
+    marker_icon_id TEXT,
     created_by TEXT,
     created_at TEXT NOT NULL
   )`,

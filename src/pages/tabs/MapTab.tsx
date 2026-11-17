@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
-import { ExternalLink, ImagePlus, Layers, MapPin, Plus, Search, Trash2, Upload } from 'lucide-react'
+import { ExternalLink, ImagePlus, Layers, MapPin, Palette, Plus, Search, Trash2, Upload } from 'lucide-react'
 import { api, uploadFile } from '../../lib/api'
 import { useApp, useAsync } from '../../lib/app-context'
 import type { GeoLocation, ProjectDetail } from '../../lib/types'
 import { ProjectMap, googleMapsHref } from '../../components/map'
+import { MARKER_DEFAULT_COLOR, MarkerStyleControls } from '../../components/marker-style'
 import { GeoImportModal } from '../../components/geo-import'
 import {
   ConfirmDialog, EmptyState, Field, ImageUpload, LoadingBlock, Modal, SearchInput, Spinner,
   VisibilityBadge, cn,
 } from '../../components/ui'
 import { formatDate } from '../../lib/format'
+import { stripHtmlToText } from '../../lib/text'
 
 export function MapTab({ project }: { project: ProjectDetail['project']; entityKey: string }) {
   const { toast, boot } = useApp()
@@ -18,10 +20,57 @@ export function MapTab({ project }: { project: ProjectDetail['project']; entityK
   const [selected, setSelected] = useState<GeoLocation | null>(null)
   const [importOpen, setImportOpen] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
+  const [markerOpen, setMarkerOpen] = useState(false)
+  const [markerSaving, setMarkerSaving] = useState(false)
+  const [markerColor, setMarkerColor] = useState(project.marker_color || MARKER_DEFAULT_COLOR)
+  const [markerIcon, setMarkerIcon] = useState<{ id: string | null; url: string | null }>({
+    id: project.marker_icon_id ?? null,
+    url: project.marker_icon_url ?? null,
+  })
+  const colorTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const { data, loading, reload } = useAsync<{ locations: GeoLocation[] }>(
     () => api.get(`/api/locations?project=${project.id}`),
     [project.id],
   )
+
+  async function commitMarker(next: { color: string; iconId: string | null; iconUrl: string | null }) {
+    setMarkerSaving(true)
+    try {
+      await api.patch(`/api/projects/${project.id}/marker`, { color: next.color, iconId: next.iconId })
+      reload()
+    } catch (err: any) {
+      toast(err?.message ?? 'Gagal menyimpan tampilan pin.', 'error')
+    } finally {
+      setMarkerSaving(false)
+    }
+  }
+
+  function changeMarker(next: { color: string; iconId: string | null; iconUrl: string | null }) {
+    const iconChanged = (next.iconId ?? null) !== (markerIcon.id ?? null)
+    setMarkerColor(next.color)
+    setMarkerIcon({ id: next.iconId, url: next.iconUrl })
+    if (colorTimer.current) clearTimeout(colorTimer.current)
+    if (iconChanged) {
+      commitMarker(next)
+      return
+    }
+    colorTimer.current = setTimeout(() => commitMarker(next), 350)
+  }
+
+  async function resetMarker() {
+    setMarkerColor(MARKER_DEFAULT_COLOR)
+    setMarkerIcon({ id: null, url: null })
+    setMarkerSaving(true)
+    try {
+      await api.patch(`/api/projects/${project.id}/marker`, { reset: true })
+      toast('Pin dikembalikan ke tampilan standar.')
+      reload()
+    } catch (err: any) {
+      toast(err?.message ?? 'Gagal mereset tampilan pin.', 'error')
+    } finally {
+      setMarkerSaving(false)
+    }
+  }
 
   const locations = (data?.locations ?? []).filter((loc) => {
     if (type !== 'all' && loc.type !== type) return false
@@ -58,6 +107,30 @@ export function MapTab({ project }: { project: ProjectDetail['project']; entityK
               {value === 'all' ? 'Semua tipe' : value === 'point' ? 'Titik' : value === 'line' ? 'Garis' : 'Area'}
             </button>
           ))}
+          {project.can_manage && (
+            <div className="relative">
+              <button className={cn('chip', markerOpen && 'chip-active')} onClick={() => setMarkerOpen((open) => !open)}>
+                <Palette className="h-3 w-3" /> Tampilan pin
+              </button>
+              {markerOpen && (
+                <div className="absolute top-full right-0 z-[1200] mt-2 w-72 rounded-2xl border border-line bg-white p-3 shadow-[0_24px_48px_-24px_rgba(31,41,51,0.45)]">
+                  <div className="mb-2 flex items-center justify-between">
+                    <p className="text-xs font-semibold text-ink">Tampilan Pin / Marker</p>
+                    {markerSaving ? <Spinner className="h-3.5 w-3.5" /> : null}
+                  </div>
+                  <MarkerStyleControls
+                    color={markerColor}
+                    iconId={markerIcon.id}
+                    iconUrl={markerIcon.url}
+                    projectId={project.id}
+                    onChange={changeMarker}
+                    onReset={resetMarker}
+                    disabled={markerSaving}
+                  />
+                </div>
+              )}
+            </div>
+          )}
           <span className="ml-auto text-[11px] text-muted">{locations.length} lokasi</span>
         </div>
       </div>
@@ -69,6 +142,7 @@ export function MapTab({ project }: { project: ProjectDetail['project']; entityK
           <ProjectMap
             locations={locations}
             height={480}
+            color={markerColor}
             tileUrl={boot?.global?.mapTileUrl}
             attribution={boot?.global?.mapAttribution}
             activeId={selected?.id ?? null}
@@ -89,7 +163,7 @@ export function MapTab({ project }: { project: ProjectDetail['project']; entityK
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium text-ink">{loc.name}</span>
-                    <span className="block truncate text-[11px] text-muted">{loc.description ?? `${loc.type} · ${loc.project_code ?? ''}`}</span>
+                    <span className="block truncate text-[11px] text-muted">{stripHtmlToText(loc.description) || `${loc.type} · ${loc.project_code ?? ''}`}</span>
                     <span className="mt-1 flex items-center gap-1.5">
                       <VisibilityBadge visibility={loc.visibility} />
                       {(loc.logbook_count ?? 0) > 0 && <span className="chip !py-0.5 !text-[9px]">{loc.logbook_count} logbook</span>}
@@ -145,6 +219,8 @@ function ManualLocationModal({
   const [form, setForm] = useState({ name: '', description: '', lat: '', lng: '', visibility: 'entity', geojson: '', googleMapsUrl: '' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [markerColor, setMarkerColor] = useState('')
+  const [markerIcon, setMarkerIcon] = useState<{ id: string | null; url: string | null }>({ id: null, url: null })
 
   async function submit() {
     setBusy(true)
@@ -166,6 +242,8 @@ function ManualLocationModal({
         description: form.description,
         visibility: form.visibility,
         googleMapsUrl: form.googleMapsUrl.trim() || null,
+        markerColor: markerColor || null,
+        markerIconId: markerIcon.id,
         geometry,
         type: geometry.type === 'Point' ? 'point' : geometry.type === 'LineString' ? 'line' : 'polygon',
       })
@@ -223,6 +301,17 @@ function ManualLocationModal({
             <option value="team">Khusus tim proyek</option>
           </select>
         </Field>
+        <div className="rounded-xl border border-line p-3">
+          <p className="mb-2 text-xs font-semibold text-ink">Tampilan pin (opsional)</p>
+          <MarkerStyleControls
+            color={markerColor || MARKER_DEFAULT_COLOR}
+            iconId={markerIcon.id}
+            iconUrl={markerIcon.url}
+            projectId={projectId}
+            onChange={(next) => { setMarkerColor(next.color); setMarkerIcon({ id: next.iconId, url: next.iconUrl }) }}
+            onReset={() => { setMarkerColor(''); setMarkerIcon({ id: null, url: null }) }}
+          />
+        </div>
         {error && <p className="rounded-xl bg-red-50 px-3 py-2 text-xs font-medium text-red-700">{error}</p>}
         <p className="text-[11px] text-muted">{canManage ? 'Anda dapat mengelola lokasi proyek ini.' : 'Lokasi akan tampil untuk tim proyek.'}</p>
       </div>
@@ -239,17 +328,64 @@ export function LocationDetail({
   const [busy, setBusy] = useState(false)
   const [mapsDraft, setMapsDraft] = useState('')
   const [mapsSaving, setMapsSaving] = useState(false)
+  const [markerColor, setMarkerColor] = useState(location.marker_color || MARKER_DEFAULT_COLOR)
+  const [markerIcon, setMarkerIcon] = useState<{ id: string | null; url: string | null }>({
+    id: location.marker_icon_id ?? null,
+    url: location.marker_icon_url ?? null,
+  })
+  const [markerSaving, setMarkerSaving] = useState(false)
+  const markerTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const { data, reload } = useAsync<{ location: GeoLocation; logbooks: any[] }>(
     () => api.get(`/api/locations/${location.id}`),
     [location.id],
   )
   const detail = data?.location ?? location
   const mapsHref = googleMapsHref(detail)
+  const descriptionText = stripHtmlToText(detail.description)
 
   useEffect(() => {
     setMapsDraft(detail.google_maps_url ?? '')
+    setMarkerColor(detail.marker_color || MARKER_DEFAULT_COLOR)
+    setMarkerIcon({ id: detail.marker_icon_id ?? null, url: detail.marker_icon_url ?? null })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detail.id, detail.google_maps_url])
+  }, [detail.id, detail.google_maps_url, detail.marker_color, detail.marker_icon_id])
+
+  async function saveMarker(next: { color: string; iconId: string | null; iconUrl: string | null }) {
+    const iconChanged = (next.iconId ?? null) !== (markerIcon.id ?? null)
+    setMarkerColor(next.color)
+    setMarkerIcon({ id: next.iconId, url: next.iconUrl })
+    if (markerTimer.current) clearTimeout(markerTimer.current)
+    const commit = async () => {
+      setMarkerSaving(true)
+      try {
+        await api.patch(`/api/locations/${location.id}`, { markerColor: next.color, markerIconId: next.iconId })
+        reload()
+        onChanged()
+      } catch (err: any) {
+        toast(err?.message ?? 'Gagal menyimpan tampilan pin.', 'error')
+      } finally {
+        setMarkerSaving(false)
+      }
+    }
+    if (iconChanged) await commit()
+    else markerTimer.current = setTimeout(commit, 350)
+  }
+
+  async function resetMarker() {
+    setMarkerColor(MARKER_DEFAULT_COLOR)
+    setMarkerIcon({ id: null, url: null })
+    setMarkerSaving(true)
+    try {
+      await api.patch(`/api/locations/${location.id}`, { markerColor: null, markerIconId: null })
+      toast('Pin lokasi dikembalikan ke standar proyek.')
+      reload()
+      onChanged()
+    } catch (err: any) {
+      toast(err?.message ?? 'Gagal mereset tampilan pin.', 'error')
+    } finally {
+      setMarkerSaving(false)
+    }
+  }
 
   async function saveMapsUrl() {
     setMapsSaving(true)
@@ -316,7 +452,22 @@ export function LocationDetail({
         }
       >
         <div className="space-y-4">
-          {detail.description && <p className="text-sm leading-relaxed text-muted">{detail.description}</p>}
+          {descriptionText && <p className="text-sm whitespace-pre-line leading-relaxed text-muted">{descriptionText}</p>}
+          <div className="rounded-xl border border-line p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-sm font-semibold text-ink">Tampilan pin lokasi</p>
+              {markerSaving ? <Spinner className="h-3.5 w-3.5" /> : null}
+            </div>
+            <MarkerStyleControls
+              color={markerColor}
+              iconId={markerIcon.id}
+              iconUrl={markerIcon.url}
+              projectId={detail.project_id ?? ''}
+              onChange={saveMarker}
+              onReset={resetMarker}
+              disabled={markerSaving}
+            />
+          </div>
           <div className="rounded-xl border border-line p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-sm font-semibold text-ink">Tautan Google Maps</p>

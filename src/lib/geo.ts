@@ -1,3 +1,5 @@
+import { stripHtmlToText } from './text'
+
 export type GeoFeature = {
   name: string
   description?: string
@@ -72,7 +74,9 @@ export function parseKml(text: string): GeoFeature[] {
   const placemarks = Array.from(doc.getElementsByTagNameNS('*', 'Placemark'))
   return placemarks.map((placemark) => {
     const name = placemark.getElementsByTagNameNS('*', 'name')[0]?.textContent?.trim() || 'Tanpa nama'
-    const description = placemark.getElementsByTagNameNS('*', 'description')[0]?.textContent?.trim()
+    // KML descriptions are HTML (Google My Maps adds hidden ARIA blocks); keep plain text only.
+    const rawDescription = placemark.getElementsByTagNameNS('*', 'description')[0]?.textContent ?? ''
+    const description = stripHtmlToText(rawDescription) || undefined
     // Google Maps links can live in <description>, <ExtendedData><Data> or a
     // <link>/<href> element — accept whichever is present.
     const extended = Array.from(placemark.getElementsByTagNameNS('*', 'Data'))
@@ -124,7 +128,7 @@ export function parseGeoJson(text: string): GeoFeature[] {
   return features.map((feature: any) => {
     const geometry = feature.geometry
     const name = feature.properties?.name || feature.properties?.Name || feature.properties?.nama || 'Tanpa nama'
-    const description = feature.properties?.description || feature.properties?.deskripsi
+    const description = stripHtmlToText(feature.properties?.description || feature.properties?.deskripsi) || undefined
     const properties = feature.properties ?? {}
     const googleMapsUrl = normalizeMapsUrl(
       MAPS_URL_KEYS.map((key) => properties[key]).find((value) => value !== undefined && value !== '')
@@ -154,7 +158,7 @@ export function featuresFromRows(rows: Record<string, string>[]): GeoFeature[] {
     const normalized: Record<string, string> = {}
     for (const [key, value] of Object.entries(row)) normalized[key.toLowerCase().trim()] = value
     const name = NAME_KEYS.map((k) => normalized[k]).find(Boolean) || 'Tanpa nama'
-    const description = DESC_KEYS.map((k) => normalized[k]).find(Boolean)
+    const description = stripHtmlToText(DESC_KEYS.map((k) => normalized[k]).find(Boolean)) || undefined
     // A maps column wins; otherwise any cell carrying a maps link (e.g. the
     // KOORDINAT column with a "📍 MAP" hyperlink) or the description still works.
     const knownMaps = MAPS_URL_KEYS.map((k) => normalized[k]).find((v) => v !== undefined && v !== '')

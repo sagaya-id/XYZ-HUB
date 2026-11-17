@@ -156,34 +156,36 @@
 .leaflet-bar a {
   color: var(--color-ink);
 }
-.xyz-pin {
+/* Clean Google-Maps-style teardrop pin (no numbers, no clusters). */
+.xyz-pin-svg {
+  display: block;
+  filter: drop-shadow(0 4px 6px rgba(31, 41, 51, 0.35));
+}
+.xyz-pin-badge {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 999px 999px 999px 4px;
-  transform: rotate(-45deg);
-  background: var(--color-forest);
-  border: 2px solid #fff;
-  box-shadow: 0 6px 14px -4px rgba(31, 41, 51, 0.5);
+  width: 32px;
+  height: 32px;
+  overflow: hidden;
+  border: 3px solid var(--color-forest);
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 4px 10px -3px rgba(31, 41, 51, 0.45);
 }
-.xyz-pin span {
-  transform: rotate(45deg);
-  color: #fff;
-  font-size: 12px;
-  font-weight: 700;
+.xyz-pin-badge img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  object-fit: cover;
 }
-.marker-cluster-small,
-.marker-cluster-medium,
-.marker-cluster-large {
-  background: rgba(36, 90, 70, 0.18);
+/* Grouped pins keep the clean look (no counts), just a slightly larger pin. */
+.xyz-cluster-pin {
+  filter: drop-shadow(0 6px 8px rgba(31, 41, 51, 0.4));
 }
-.marker-cluster-small div,
-.marker-cluster-medium div,
-.marker-cluster-large div {
-  background: var(--color-forest);
-  color: #fff;
-  font-weight: 600;
+.xyz-cluster-badge {
+  width: 38px;
+  height: 38px;
 }
 
 /* Calendar */

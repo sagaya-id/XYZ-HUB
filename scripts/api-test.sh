@@ -188,7 +188,29 @@ check "gallery persists photos after reload" "2" "$(echo "$GAL_AFTER" | j photos
 GAL_CLEAN=$(echo "$GAL_AFTER" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const o=JSON.parse(d);console.log(o.photos.map(p=>p.id).join(' '))})")
 for gid in $GAL_CLEAN; do code ma DELETE "/api/gallery/$gid" > /dev/null; done
 
- echo "== 14. Cleanup test artefacts =="
+echo "== 14. Tampilan pin peta =="
+check "project marker colour saved" "200" "$(code sa PATCH /api/projects/prj_p1/marker '{"color":"#2563EB"}')"
+check "project marker colour persisted" "#2563eb" "$(req sa GET /api/projects/prj_p1 | j project.marker_color)"
+check "locations inherit project marker colour" "#2563eb" "$(req sa GET '/api/locations?project=prj_p1' | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const o=JSON.parse(d);const p=o.locations.find(l=>l.type==='point');console.log(p?String(p.marker_color):'none')})")"
+check "member without admin rights cannot change project marker" "403" "$(code siti PATCH /api/projects/prj_p1/marker '{"color":"#EA4335"}')"
+check "cross-entity marker update blocked" "403" "$(code sb PATCH /api/projects/prj_p1/marker '{"color":"#EA4335"}')"
+MARK_LOC=$(req rina POST /api/locations '{"projectId":"prj_p1","name":"Titik Warna Uji","geometry":{"type":"Point","coordinates":[106.81,-6.61]},"markerColor":"#EA4335"}')
+MARK_LOC_ID=$(echo "$MARK_LOC" | j location.id)
+check "location marker override saved" "#ea4335" "$(req sa GET "/api/locations/$MARK_LOC_ID" | j location.marker_color)"
+check "unknown marker icon rejected" "400" "$(code sa PATCH /api/projects/prj_p1/marker '{"iconId":"fil_tidak_ada"}')"
+check "project marker reset" "200" "$(code sa PATCH /api/projects/prj_p1/marker '{"reset":true}')"
+check "project marker cleared" "null" "$(req sa GET /api/projects/prj_p1 | j project.marker_color)"
+check "location override survives project reset" "#ea4335" "$(req sa GET "/api/locations/$MARK_LOC_ID" | j location.marker_color)"
+code rina DELETE "/api/locations/$MARK_LOC_ID" > /dev/null
+HTML_LOC=$(req rina POST /api/locations '{"projectId":"prj_p1","name":"MOB-G/013","description":"<div>Rumah Bapak Muh. Sarji</div><div role=\"status\" aria-hidden=\"true\"></div><div>RT 03 &amp; RW 05<br>Desa Uji</div>","geometry":{"type":"Point","coordinates":[106.82,-6.62]}}')
+HTML_LOC_ID=$(echo "$HTML_LOC" | j location.id)
+HTML_DESC=$(req sa GET "/api/locations/$HTML_LOC_ID" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const o=JSON.parse(d);console.log(JSON.stringify(o.location.description))})")
+check "kml html description has no tags" "false" "$(node -e "const d=JSON.parse(process.argv[1]);console.log(/[<>]/.test(d))" "$HTML_DESC")"
+check "kml html description starts with clean text" "true" "$(node -e "const d=JSON.parse(process.argv[1]);console.log(d.trim().startsWith('Rumah Bapak Muh. Sarji'))" "$HTML_DESC")"
+check "kml html entities decoded" "true" "$(node -e "const d=JSON.parse(process.argv[1]);console.log(d.includes('RT 03 & RW 05'))" "$HTML_DESC")"
+code rina DELETE "/api/locations/$HTML_LOC_ID" > /dev/null
+
+ echo "== 15. Cleanup test artefacts =="
 check "removed member cannot move tasks" "403" "$(code dimas POST "/api/tasks/$TASK_ID/move" "{\"boardId\":\"$TARGET_COL\"}")"
 check "archive test project" "200" "$(code sa POST "/api/projects/$NEW_ID/archive" '{"archived":true}')"
 check "delete test project (soft)" "200" "$(code sa DELETE "/api/projects/$NEW_ID")"

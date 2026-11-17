@@ -157,6 +157,7 @@ projectRoutes.get('/projects/:id', async (c) => {
     project: {
       ...project,
       cover_url: project.cover_id ? `/api/files/${project.cover_id}` : null,
+      marker_icon_url: project.marker_icon_id ? `/api/files/${project.marker_icon_id}` : null,
       is_member: !!member,
       can_manage: isAdminOf(user, project, member),
       can_contribute: !!member || user.role === 'SA' || user.role === 'MA',

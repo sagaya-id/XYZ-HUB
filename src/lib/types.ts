@@ -80,6 +80,9 @@ export type ProjectSummary = {
   start_date: string | null
   end_date: string | null
   visibility: 'team' | 'entity'
+  marker_color?: string | null
+  marker_icon_id?: string | null
+  marker_icon_url?: string | null
   archived_at: string | null
   member_count: number
   pic_name: string | null
@@ -210,6 +213,9 @@ export type GeoLocation = {
   lat: number | null
   google_maps_url: string | null
   maps_url?: string | null
+  marker_color?: string | null
+  marker_icon_id?: string | null
+  marker_icon_url?: string | null
   visibility: 'team' | 'entity'
   photos?: { id: string; file_id: string; url: string; caption: string | null }[]
   logbook_count?: number

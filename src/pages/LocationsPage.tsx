@@ -138,8 +138,8 @@ export function LocationsPage() {
       {loading ? (
         <LoadingBlock label="Memuat peta entitas…" />
       ) : (
-        <div className="grid gap-4 xl:grid-cols-[1.65fr_1fr]">
-          <div className="space-y-3">
+        <div className="grid gap-4 lg:grid-cols-[1.65fr_1fr]">
+          <div className="min-w-0 space-y-3">
             <ProjectMap
               locations={filtered}
               height={540}
@@ -156,7 +156,7 @@ export function LocationsPage() {
             </div>
           </div>
 
-          <div className="space-y-2">
+          <div className="min-w-0 space-y-2">
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-white px-3 py-2">
               <label className="flex cursor-pointer items-center gap-2 text-[11px] font-medium text-ink">
                 <input

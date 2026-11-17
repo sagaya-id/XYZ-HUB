@@ -2,8 +2,9 @@ import { Hono } from 'hono'
 import type { AppEnv } from '../ctx'
 import { one, q, run, uid, nowIso, parseJson } from '../db'
 import { projectIdsForUser } from '../auth'
-import { HttpError, isAdminOf, loadProject, resolveEntity, canSeeVisibility } from '../scope'
+import { HttpError, isAdminOf, loadProject, requireProjectAdmin, resolveEntity, canSeeVisibility } from '../scope'
 import { audit } from '../lib'
+import { stripHtmlOrNull } from '../text'
 
 export const locationRoutes = new Hono<AppEnv>()
 
@@ -35,10 +36,33 @@ function mapsUrlFor(row: any): string | null {
   return null
 }
 
+function cleanColor(value: unknown): string | null {
+  const raw = String(value ?? '').trim()
+  if (!raw) return null
+  return /^#[0-9a-fA-F]{6}$/.test(raw) ? raw.toLowerCase() : null
+}
+
+/** Validate a marker icon upload so it stays inside the same project/entity. */
+async function resolveIconId(env: any, value: unknown, project: any): Promise<string | null> {
+  const raw = String(value ?? '').trim()
+  if (!raw) return null
+  const file = await one<any>(env.DB, `SELECT * FROM files WHERE id = ?`, raw)
+  if (!file) throw new HttpError(400, 'Ikon marker tidak ditemukan.')
+  if (!/^image\//i.test(file.mime)) throw new HttpError(400, 'Ikon marker harus berupa berkas gambar.')
+  if (file.project_id && file.project_id !== project.id) throw new HttpError(400, 'Ikon milik proyek lain.')
+  if (file.entity_id && file.entity_id !== project.entity_id) throw new HttpError(400, 'Ikon milik entitas lain.')
+  return file.id
+}
+
 function serializeLocation(row: any, canSeeTeam: boolean) {
+  // Location override wins; otherwise the project-wide marker style applies.
+  const iconId = row.marker_icon_id || row.project_marker_icon_id || null
   return {
     ...row,
     geojson: parseJson<any>(row.geojson, null),
+    marker_color: row.marker_color || row.project_marker_color || null,
+    marker_icon_id: iconId,
+    marker_icon_url: iconId ? `/api/files/${iconId}` : null,
     photos: [],
     maps_url: mapsUrlFor(row),
     restricted: row.visibility === 'team' && !canSeeTeam,
@@ -58,8 +82,9 @@ locationRoutes.get('/locations', async (c) => {
     await loadProject(c.env, user, projectParam)
     rows = await q<any>(
       c.env.DB,
-      `SELECT l.*, p.title AS project_title, p.code AS project_code FROM locations l
-       JOIN projects p ON p.id = l.project_id
+      `SELECT l.*, p.title AS project_title, p.code AS project_code,
+        p.marker_color AS project_marker_color, p.marker_icon_id AS project_marker_icon_id
+       FROM locations l JOIN projects p ON p.id = l.project_id
        WHERE l.project_id = ? AND p.deleted_at IS NULL ORDER BY l.created_at DESC`,
       projectParam,
     )
@@ -68,8 +93,9 @@ locationRoutes.get('/locations', async (c) => {
     const placeholders = ids.map(() => '?').join(',')
     rows = await q<any>(
       c.env.DB,
-      `SELECT l.*, p.title AS project_title, p.code AS project_code FROM locations l
-       JOIN projects p ON p.id = l.project_id
+      `SELECT l.*, p.title AS project_title, p.code AS project_code,
+        p.marker_color AS project_marker_color, p.marker_icon_id AS project_marker_icon_id
+       FROM locations l JOIN projects p ON p.id = l.project_id
        WHERE l.project_id IN (${placeholders}) AND p.deleted_at IS NULL ORDER BY l.created_at DESC`,
       ...ids,
     )
@@ -120,14 +146,16 @@ locationRoutes.post('/locations', async (c) => {
   const type = ['point', 'line', 'polygon'].includes(body.type) ? body.type : geometry.type === 'Point' ? 'point' : geometry.type === 'LineString' ? 'line' : 'polygon'
   const center = geometryCenter(geometry)
   const id = uid('loc_')
+  const markerColor = cleanColor(body.markerColor)
+  const markerIconId = await resolveIconId(c.env, body.markerIconId, project)
   await run(
     c.env.DB,
-    `INSERT INTO locations (id, entity_id, project_id, name, description, type, geojson, lon, lat, visibility, google_maps_url, created_by, created_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    id, project.entity_id, project.id, name, body.description ?? null, type,
+    `INSERT INTO locations (id, entity_id, project_id, name, description, type, geojson, lon, lat, visibility, google_maps_url, marker_color, marker_icon_id, created_by, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    id, project.entity_id, project.id, name, stripHtmlOrNull(body.description), type,
     JSON.stringify({ type: geometry.type, coordinates: geometry.coordinates }),
     center.lon, center.lat, body.visibility === 'team' ? 'team' : 'entity',
-    cleanMapsUrl(body.googleMapsUrl ?? body.gmapsLink), user.id, nowIso(),
+    cleanMapsUrl(body.googleMapsUrl ?? body.gmapsLink), markerColor, markerIconId, user.id, nowIso(),
   )
   if (Array.isArray(body.photoIds)) {
     for (const fileId of body.photoIds) {
@@ -173,7 +201,7 @@ locationRoutes.post('/locations/import', async (c) => {
       c.env.DB,
       `INSERT INTO locations (id, entity_id, project_id, name, description, type, geojson, lon, lat, visibility, google_maps_url, created_by, created_at)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      id, project.entity_id, project.id, String(f.name ?? 'Lokasi tanpa nama'), f.description ?? null, type,
+      id, project.entity_id, project.id, String(f.name ?? 'Lokasi tanpa nama'), stripHtmlOrNull(f.description), type,
       JSON.stringify({ type: geometry.type, coordinates: geometry.coordinates }),
       center.lon, center.lat, body.visibility === 'team' ? 'team' : 'entity', importedLink, user.id, nowIso(),
     )
@@ -206,11 +234,16 @@ locationRoutes.patch('/locations/:id', async (c) => {
   const googleMapsUrl = body.googleMapsUrl !== undefined || body.gmapsLink !== undefined
     ? cleanMapsUrl(body.googleMapsUrl ?? body.gmapsLink)
     : loc.google_maps_url
+  let markerColor = loc.marker_color
+  let markerIconId = loc.marker_icon_id
+  if (body.markerColor !== undefined) markerColor = cleanColor(body.markerColor)
+  if (body.markerIconId !== undefined) markerIconId = await resolveIconId(c.env, body.markerIconId, project)
   await run(
     c.env.DB,
-    `UPDATE locations SET name = ?, description = ?, visibility = ?, geojson = ?, lon = ?, lat = ?, google_maps_url = ? WHERE id = ?`,
-    body.name ?? loc.name, body.description !== undefined ? body.description : loc.description,
-    body.visibility ?? loc.visibility, geojson, lon, lat, googleMapsUrl, loc.id,
+    `UPDATE locations SET name = ?, description = ?, visibility = ?, geojson = ?, lon = ?, lat = ?, google_maps_url = ?,
+      marker_color = ?, marker_icon_id = ? WHERE id = ?`,
+    body.name ?? loc.name, body.description !== undefined ? stripHtmlOrNull(body.description) : loc.description,
+    body.visibility ?? loc.visibility, geojson, lon, lat, googleMapsUrl, markerColor, markerIconId, loc.id,
   )
   await audit(c.env, user, 'location.updated', 'location', loc.id, `Memperbarui lokasi ${body.name ?? loc.name}`, project.entity_id)
   return c.json({ ok: true })
@@ -272,8 +305,38 @@ locationRoutes.get('/locations/:id', async (c) => {
     loc.id,
   )
   return c.json({
-    location: { ...serializeLocation(loc, true), project_title: project.title, photos: photos.map((p) => ({ ...p, url: `/api/files/${p.file_id}` })) },
+    location: {
+      ...serializeLocation({ ...loc, project_marker_color: project.marker_color, project_marker_icon_id: project.marker_icon_id }, true),
+      project_title: project.title,
+      photos: photos.map((p) => ({ ...p, url: `/api/files/${p.file_id}` })),
+    },
     logbooks,
+  })
+})
+
+locationRoutes.patch('/projects/:id/marker', async (c) => {
+  const user = c.get('user')
+  const { project } = await requireProjectAdmin(c.env, user, c.req.param('id'))
+  const body = await c.req.json().catch(() => ({}))
+  let color: string | null
+  let iconId: string | null
+  if (body.reset) {
+    color = null
+    iconId = null
+  } else {
+    color = body.color !== undefined ? cleanColor(body.color) : project.marker_color
+    iconId = body.iconId !== undefined ? await resolveIconId(c.env, body.iconId, project) : project.marker_icon_id
+  }
+  await run(c.env.DB, `UPDATE projects SET marker_color = ?, marker_icon_id = ? WHERE id = ?`, color, iconId, project.id)
+  await audit(
+    c.env, user, 'project.marker_updated', 'project', project.id,
+    `Memperbarui tampilan pin peta ${project.title}`, project.entity_id,
+  )
+  return c.json({
+    ok: true,
+    marker_color: color,
+    marker_icon_id: iconId,
+    marker_icon_url: iconId ? `/api/files/${iconId}` : null,
   })
 })
 
