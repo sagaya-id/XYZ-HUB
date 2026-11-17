@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ArrowDownUp, CheckSquare, ChevronDown, Download, FileSpreadsheet, Filter, History, Link2, Plus,
-  RefreshCw, Table2, Trash2, Upload, X,
+  ArrowDownUp, Check, CheckSquare, ChevronDown, Columns3, Download, ExternalLink, FilePen, FileSpreadsheet, Filter,
+  History, Link2, MoreVertical, Pencil, Plus, RefreshCw, Table2, Trash2, Upload, X,
 } from 'lucide-react'
 import { api } from '../../lib/api'
 import { useApp, useAsync } from '../../lib/app-context'
@@ -10,6 +10,7 @@ import {
   ConfirmDialog, EmptyState, Field, LoadingBlock, Modal, SearchInput, Spinner, VisibilityBadge, cn,
 } from '../../components/ui'
 import { ImportWizard } from '../../components/import-wizard'
+import { DataImportModal } from '../../components/data-import'
 import { formatDateTime, relativeTime } from '../../lib/format'
 
 type DataResponse = {
@@ -100,6 +101,13 @@ export function DataTab({ project }: { project: ProjectDetail['project']; entity
   const [rowModal, setRowModal] = useState<{ record: DataRecord | null } | null>(null)
   const [fieldModal, setFieldModal] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [advancedImportOpen, setAdvancedImportOpen] = useState(false)
+  const [columnMenu, setColumnMenu] = useState<string | null>(null)
+  const [manageColumnsOpen, setManageColumnsOpen] = useState(false)
+  const [renameTarget, setRenameTarget] = useState<DataField | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
+  const [deleteFieldTarget, setDeleteFieldTarget] = useState<DataField | null>(null)
+  const [fieldBusy, setFieldBusy] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<DataRecord | null>(null)
   const [sheetOpen, setSheetOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -111,6 +119,46 @@ export function DataTab({ project }: { project: ProjectDetail['project']; entity
   const fields = data?.fields ?? []
   const records = data?.records ?? []
   const canContribute = data?.can_contribute ?? false
+  // Column schema changes mirror the server guard: Master/Super Admin and the
+  // project's admin (Project Admin) only — plain contributors cannot rename or drop columns.
+  const canManageColumns = project.can_manage
+
+  async function renameField(field: DataField, label: string) {
+    const next = label.trim()
+    if (!next) {
+      toast('Nama kolom wajib diisi.', 'error')
+      return false
+    }
+    if (next === field.label) return true
+    setFieldBusy(true)
+    try {
+      await api.patch(`/api/data/fields/${field.id}`, { label: next })
+      toast('Nama kolom diperbarui. Nilai sel tetap utuh.')
+      setRenameTarget(null)
+      reload()
+      return true
+    } catch (err: any) {
+      toast(err?.message ?? 'Gagal mengubah nama kolom', 'error')
+      return false
+    } finally {
+      setFieldBusy(false)
+    }
+  }
+
+  async function removeField(field: DataField) {
+    setFieldBusy(true)
+    try {
+      await api.del(`/api/data/fields/${field.id}`)
+      toast(`Kolom “${field.label}” dihapus beserta seluruh nilainya.`)
+      setDeleteFieldTarget(null)
+      setManageColumnsOpen(false)
+      reload()
+    } catch (err: any) {
+      toast(err?.message ?? 'Gagal menghapus kolom', 'error')
+    } finally {
+      setFieldBusy(false)
+    }
+  }
 
   const meta = useMemo(() => {
     const map: Record<string, ColumnMeta> = {}
@@ -248,10 +296,15 @@ export function DataTab({ project }: { project: ProjectDetail['project']; entity
             </div>
             <button className="btn-secondary btn-sm" onClick={() => setHistoryOpen(true)}><History className="h-3.5 w-3.5" /> Riwayat</button>
             <button className="btn-secondary btn-sm" onClick={() => setSheetOpen(true)}><Link2 className="h-3.5 w-3.5" /> Google Sheets</button>
+            {canManageColumns && (
+              <button className="btn-secondary btn-sm" onClick={() => setManageColumnsOpen(true)} disabled={fields.length === 0}>
+                <Columns3 className="h-3.5 w-3.5" /> Kelola Kolom
+              </button>
+            )}
             {canContribute && (
               <>
-                <button className="btn-secondary btn-sm" onClick={() => setFieldModal(true)}><Table2 className="h-3.5 w-3.5" /> Kolom</button>
-                <button className="btn-secondary btn-sm" onClick={() => setImportOpen(true)} disabled={fields.length === 0}><Upload className="h-3.5 w-3.5" /> Impor</button>
+                <button className="btn-secondary btn-sm" onClick={() => setFieldModal(true)}><Table2 className="h-3.5 w-3.5" /> Tambah kolom</button>
+                <button className="btn-secondary btn-sm" onClick={() => setImportOpen(true)}><Upload className="h-3.5 w-3.5" /> Impor</button>
                 <button className="btn-primary btn-sm" onClick={() => setRowModal({ record: null })} disabled={fields.length === 0}><Plus className="h-3.5 w-3.5" /> Baris</button>
               </>
             )}
@@ -324,17 +377,54 @@ export function DataTab({ project }: { project: ProjectDetail['project']; entity
                     />
                   </th>
                   {fields.map((field) => (
-                    <th key={field.id} className="px-3 pt-2.5 pb-1 text-left align-bottom">
-                      <button
-                        className="inline-flex items-center gap-1 text-[11px] font-semibold tracking-wide text-muted uppercase hover:text-ink"
-                        onClick={() => {
-                          if (sortKey === field.key) setSortDir(sortDir === 'asc' ? 'desc' : 'asc')
-                          else { setSortKey(field.key); setSortDir('asc') }
-                        }}
-                      >
-                        {field.label}
-                        <ArrowDownUp className={cn('h-3 w-3', sortKey === field.key ? 'text-forest' : 'text-line')} />
-                      </button>
+                    <th key={field.id} className="relative px-3 pt-2.5 pb-1 text-left align-bottom">
+                      <div className="flex items-center gap-1">
+                        <button
+                          className="inline-flex items-center gap-1 text-[11px] font-semibold tracking-wide text-muted uppercase hover:text-ink"
+                          onClick={() => {
+                            if (sortKey === field.key) setSortDir(sortDir === 'asc' ? 'desc' : 'asc')
+                            else { setSortKey(field.key); setSortDir('asc') }
+                          }}
+                        >
+                          {field.label}
+                          <ArrowDownUp className={cn('h-3 w-3', sortKey === field.key ? 'text-forest' : 'text-line')} />
+                        </button>
+                        {canManageColumns && (
+                          <button
+                            className="rounded-md p-0.5 text-muted hover:bg-canvas hover:text-ink"
+                            onClick={() => setColumnMenu(columnMenu === field.id ? null : field.id)}
+                            aria-label={`Aksi kolom ${field.label}`}
+                            aria-expanded={columnMenu === field.id}
+                          >
+                            <MoreVertical className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+                      {columnMenu === field.id && (
+                        <>
+                          <div className="fixed inset-0 z-20" onClick={() => setColumnMenu(null)} />
+                          <div className="absolute left-2 z-30 mt-1 w-48 overflow-hidden rounded-xl border border-line bg-white py-1 shadow-[0_18px_40px_-20px_rgba(31,41,51,0.4)]">
+                            <button
+                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-ink hover:bg-canvas"
+                              onClick={() => {
+                                setRenameTarget(field)
+                                setRenameDraft(field.label)
+                                setColumnMenu(null)
+                              }}
+                            >
+                              <Pencil className="h-3.5 w-3.5 text-muted" /> Ubah nama kolom
+                            </button>
+                            <button
+                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+                              onClick={() => { setDeleteFieldTarget(field); setColumnMenu(null) }}
+                              disabled={fields.length <= 1}
+                              title={fields.length <= 1 ? 'Tabel harus memiliki minimal satu kolom' : undefined}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" /> Hapus kolom
+                            </button>
+                          </div>
+                        </>
+                      )}
                     </th>
                   ))}
                   <th className="px-3 pt-2.5 pb-1 text-right align-bottom text-[11px] font-semibold tracking-wide text-muted uppercase">Aksi</th>
@@ -440,7 +530,9 @@ export function DataTab({ project }: { project: ProjectDetail['project']; entity
                       />
                     </td>
                     {fields.map((field) => (
-                      <td key={field.id} className="max-w-[240px] truncate px-3 py-2 text-ink">{String(record.data[field.key] ?? '—')}</td>
+                      <td key={field.id} className="max-w-[240px] truncate px-3 py-2 text-ink">
+                        <CellValue value={record.data[field.key]} />
+                      </td>
                     ))}
                     <td className="px-3 py-2 text-right">
                       <div className="inline-flex items-center gap-1">
@@ -514,11 +606,22 @@ export function DataTab({ project }: { project: ProjectDetail['project']; entity
         />
       )}
 
-      <ImportWizard
+      <DataImportModal
         open={importOpen}
         onClose={() => setImportOpen(false)}
-        title={`Impor data — ${project.title}`}
-        description="Unggah CSV/XLS/XLSX, pilih worksheet, petakan kolom, lalu validasi sebelum menyimpan."
+        projectId={project.id}
+        projectTitle={project.title}
+        canReplace={canManageColumns}
+        existingFields={fields.map((f) => ({ key: f.key, label: f.label }))}
+        onImported={() => reload()}
+        onAdvanced={() => setAdvancedImportOpen(true)}
+      />
+
+      <ImportWizard
+        open={advancedImportOpen}
+        onClose={() => setAdvancedImportOpen(false)}
+        title={`Impor lanjutan — ${project.title}`}
+        description="Petakan kolom secara manual, validasi baris, lalu pilih mode Append/Update/Skip."
         fields={fields.map((f) => ({ key: f.key, label: f.label }))}
         dedupeHint="Update akan menggabungkan nilai baru tanpa menghapus kolom lain pada baris yang sama."
         onConfirm={async (payload) => {
@@ -529,6 +632,7 @@ export function DataTab({ project }: { project: ProjectDetail['project']; entity
               mode: payload.mode,
               dedupeField: payload.dedupeField,
               filename: payload.filename,
+              worksheet: payload.worksheet,
               source: 'file',
               fields: fields.map((f) => ({ key: f.key, label: f.label })),
             },
@@ -536,6 +640,61 @@ export function DataTab({ project }: { project: ProjectDetail['project']; entity
           reload()
           return `Impor selesai: ${res.inserted} baru, ${res.updated} diperbarui, ${res.skipped} dilewati.`
         }}
+      />
+
+      {manageColumnsOpen && (
+        <ManageColumnsModal
+          projectId={project.id}
+          fields={fields}
+          busy={fieldBusy}
+          onClose={() => setManageColumnsOpen(false)}
+          onRename={(field, label) => renameField(field, label)}
+          onDelete={(field) => setDeleteFieldTarget(field)}
+          onChanged={() => { reload(); setDeleteFieldTarget(null) }}
+        />
+      )}
+
+      {renameTarget && (
+        <Modal
+          open
+          onClose={() => setRenameTarget(null)}
+          size="sm"
+          title="Ubah nama kolom"
+          description={`Kunci kolom ${renameTarget.key} tidak berubah, sehingga seluruh nilai sel tetap tersimpan.`}
+          footer={
+            <div className="flex justify-end gap-2">
+              <button className="btn-secondary" onClick={() => setRenameTarget(null)}>Batal</button>
+              <button
+                className="btn-primary"
+                onClick={() => renameField(renameTarget, renameDraft)}
+                disabled={fieldBusy || !renameDraft.trim()}
+              >
+                {fieldBusy && <Spinner />} Simpan nama
+              </button>
+            </div>
+          }
+        >
+          <Field label="Nama kolom" required>
+            <input
+              className="input"
+              value={renameDraft}
+              onChange={(e) => setRenameDraft(e.target.value)}
+              autoFocus
+              placeholder={renameTarget.label}
+            />
+          </Field>
+        </Modal>
+      )}
+
+      <ConfirmDialog
+        open={!!deleteFieldTarget}
+        title={`Hapus kolom '${deleteFieldTarget?.label ?? ''}'?`}
+        description="Seluruh data pada kolom ini akan dihapus secara permanen."
+        danger
+        confirmLabel="Hapus kolom"
+        busy={fieldBusy}
+        onCancel={() => setDeleteFieldTarget(null)}
+        onConfirm={() => deleteFieldTarget && removeField(deleteFieldTarget)}
       />
 
       {sheetOpen && (
@@ -658,6 +817,199 @@ function RowModal({
   )
 }
 
+/** Renders URL cells (e.g. the extracted "📍 MAP" href) as safe external links. */
+function CellValue({ value }: { value: unknown }) {
+  const text = String(value ?? '').trim()
+  if (!text) return <span className="text-muted">—</span>
+  if (!/^https?:\/\//i.test(text)) return <>{text}</>
+  const isMaps = /(google\.[a-z.]+\/maps|maps\.google\.[a-z.]+|goo\.gl\/maps|maps\.app\.goo\.gl)/i.test(text)
+  return (
+    <a
+      href={text}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1 rounded-md bg-forest-50 px-1.5 py-0.5 text-[11px] font-medium text-forest hover:underline"
+      title={text}
+    >
+      <ExternalLink className="h-3 w-3 shrink-0" /> {isMaps ? 'Buka Maps' : 'Buka tautan'}
+    </a>
+  )
+}
+
+function ManageColumnsModal({
+  projectId, fields, busy, onClose, onRename, onDelete, onChanged,
+}: {
+  projectId: string
+  fields: DataField[]
+  busy: boolean
+  onClose: () => void
+  onRename: (field: DataField, label: string) => Promise<boolean> | void
+  onDelete: (field: DataField) => void
+  onChanged: () => void
+}) {
+  const { toast } = useApp()
+  const [selected, setSelected] = useState<string[]>([])
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const allRef = useRef<HTMLInputElement>(null)
+  const allSelected = fields.length > 0 && selected.length === fields.length
+  const someSelected = selected.length > 0 && !allSelected
+
+  useEffect(() => {
+    if (allRef.current) allRef.current.indeterminate = someSelected
+  }, [someSelected])
+
+  function toggleAll() {
+    setSelected(allSelected ? [] : fields.map((field) => field.id))
+  }
+
+  function toggleOne(id: string) {
+    setSelected((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]))
+  }
+
+  async function bulkDelete() {
+    setDeleting(true)
+    try {
+      const res = await api.post<{ deleted: number; records: number; kept: string | null }>(
+        `/api/projects/${projectId}/data/fields/bulk-delete`,
+        { ids: selected },
+      )
+      toast(
+        res.kept
+          ? `${res.deleted} kolom dihapus; kolom “${res.kept}” dipertahankan agar tabel tetap memiliki header.`
+          : `${res.deleted} kolom dihapus beserta seluruh nilainya.`,
+      )
+      setSelected([])
+      setConfirmOpen(false)
+      onChanged()
+    } catch (err: any) {
+      toast(err?.message ?? 'Gagal menghapus kolom terpilih', 'error')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      size="lg"
+      title="Kelola kolom"
+      description="Ubah nama kolom, hapus satu kolom, atau pilih beberapa kolom untuk dihapus sekaligus. Kunci kolom tidak berubah saat diganti namanya."
+      footer={
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <button
+            className="btn-danger"
+            onClick={() => setConfirmOpen(true)}
+            disabled={selected.length === 0 || fields.length <= 1 || deleting}
+          >
+            <Trash2 className="h-4 w-4" /> Hapus {Math.min(selected.length, Math.max(fields.length - 1, 0)) || ''} Kolom Terpilih
+          </button>
+          <button className="btn-secondary" onClick={onClose}>Tutup</button>
+        </div>
+      }
+    >
+      <div className="mb-2 flex items-center justify-between gap-2 rounded-xl border border-line bg-canvas/60 px-3 py-2">
+        <label className="flex items-center gap-2 text-xs font-medium text-ink">
+          <input
+            ref={allRef}
+            type="checkbox"
+            checked={allSelected}
+            onChange={toggleAll}
+            aria-label="Pilih semua kolom"
+          />
+          Pilih Semua
+        </label>
+        <span className="text-[11px] text-muted">{selected.length} dari {fields.length} kolom dipilih</span>
+      </div>
+      <div className="space-y-2">
+        {fields.map((field) => (
+          <ColumnRow
+            key={field.id}
+            field={field}
+            selected={selected.includes(field.id)}
+            canDelete={fields.length > 1}
+            busy={busy || deleting}
+            onToggle={() => toggleOne(field.id)}
+            onRename={(label) => onRename(field, label)}
+            onDelete={() => onDelete(field)}
+          />
+        ))}
+      </div>
+      {selected.length > 0 && (
+        <p className={cn(
+          'mt-3 rounded-xl px-3 py-2 text-[11px]',
+          selected.length >= fields.length ? 'bg-amber-50 text-amber-800' : 'bg-canvas text-muted',
+        )}>
+          {selected.length >= fields.length
+            ? 'Semua kolom dipilih. Kolom pertama otomatis dipertahankan agar tabel tidak kehilangan header.'
+            : `${selected.length} kolom akan dihapus beserta seluruh nilainya di setiap baris.`}
+        </p>
+      )}
+      <ConfirmDialog
+        open={confirmOpen}
+        title={`Hapus ${Math.min(selected.length, fields.length - 1)} kolom terpilih?`}
+        description="Seluruh data pada kolom-kolom ini akan dihapus secara permanen."
+        danger
+        confirmLabel={`Hapus ${Math.min(selected.length, fields.length - 1)} kolom`}
+        busy={deleting}
+        onCancel={() => setConfirmOpen(false)}
+        onConfirm={bulkDelete}
+      />
+    </Modal>
+  )
+}
+
+function ColumnRow({
+  field, selected, canDelete, busy, onToggle, onRename, onDelete,
+}: {
+  field: DataField
+  selected: boolean
+  canDelete: boolean
+  busy: boolean
+  onToggle: () => void
+  onRename: (label: string) => Promise<boolean> | void
+  onDelete: () => void
+}) {
+  const [label, setLabel] = useState(field.label)
+  const dirty = label.trim() !== field.label && label.trim().length > 0
+
+  return (
+    <div className={cn(
+      'flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2',
+      selected ? 'border-forest/40 bg-forest-50/40' : 'border-line',
+    )}>
+      <input
+        type="checkbox"
+        checked={selected}
+        onChange={onToggle}
+        aria-label={`Pilih kolom ${field.label}`}
+        className="shrink-0"
+      />
+      <FilePen className="h-3.5 w-3.5 shrink-0 text-muted" />
+      <input
+        className="input min-w-0 flex-1 !py-1.5 text-xs"
+        value={label}
+        onChange={(e) => setLabel(e.target.value)}
+        aria-label={`Nama kolom ${field.label}`}
+      />
+      <span className="hidden shrink-0 font-mono text-[10px] text-muted sm:block">{field.key}</span>
+      <button className="btn-secondary btn-sm shrink-0" onClick={() => onRename(label)} disabled={!dirty || busy}>
+        <Check className="h-3 w-3" /> Simpan
+      </button>
+      <button
+        className="shrink-0 rounded-lg p-1.5 text-muted hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
+        onClick={onDelete}
+        disabled={!canDelete || busy}
+        aria-label={`Hapus kolom ${field.label}`}
+        title={canDelete ? 'Hapus kolom' : 'Tabel harus memiliki minimal satu kolom'}
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  )
+}
+
 function AddFieldModal({ projectId, onClose, onSaved }: { projectId: string; onClose: () => void; onSaved: () => void }) {
   const { toast } = useApp()
   const [form, setForm] = useState({ label: '', key: '' })
@@ -717,19 +1069,64 @@ function SheetModal({
 }) {
   const { toast } = useApp()
   const [url, setUrl] = useState(sheet?.url ?? '')
+  const [worksheet, setWorksheet] = useState(sheet?.worksheet ?? '')
+  const [tabs, setTabs] = useState<{ gid: string; name: string }[]>([])
+  const [tabNotice, setTabNotice] = useState<string | null>(null)
+  const [tabsBusy, setTabsBusy] = useState(false)
+  const [manualTab, setManualTab] = useState('')
+  const [syncMode, setSyncMode] = useState<'merge' | 'reset'>('merge')
   const [dedupeField, setDedupeField] = useState(fields[0]?.key ?? '')
   const [conflictPolicy, setConflictPolicy] = useState<'remote' | 'local'>('remote')
   const [busy, setBusy] = useState(false)
   const [preview, setPreview] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
 
+  /** Reads every tab of the pasted URL; the gid in the link is pre-selected. */
+  async function loadTabs(target = url, preselectGid = true) {
+    if (!target.trim()) return
+    setTabsBusy(true)
+    setTabNotice(null)
+    setError(null)
+    try {
+      const res = await api.post<{ sheets: { gid: string; name: string }[]; selectedGid: string | null; restricted: boolean; message: string | null }>(
+        `/api/projects/${project.id}/sheets/tabs`,
+        { url: target },
+      )
+      setTabs(res.sheets)
+      setTabNotice(res.message ?? null)
+      // Auto-loading on open must not override the tab saved in the project; an
+      // explicit "Muat Daftar Sheet" click still pre-selects the gid in the URL.
+      if (preselectGid && res.selectedGid) setWorksheet(res.selectedGid)
+      else if (!worksheet && res.sheets[0]) setWorksheet(res.sheets[0].gid || res.sheets[0].name)
+    } catch (err: any) {
+      setTabs([])
+      setTabNotice(err?.message ?? 'Daftar tab tidak dapat dibaca otomatis. Ketik nama tab secara manual.')
+    } finally {
+      setTabsBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    if (sheet?.url) void loadTabs(sheet.url, !sheet.worksheet)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  function useManualTab() {
+    const name = manualTab.trim()
+    if (!name) return
+    setWorksheet(name)
+    setTabs((prev) => (prev.some((tab) => tab.name === name) ? prev : [...prev, { gid: name, name }]))
+    setPreview(null)
+  }
+
   async function linkSheet() {
     setBusy(true)
     setError(null)
     try {
-      await api.put(`/api/projects/${project.id}/sheets`, { url })
-      toast('Google Sheets terhubung.')
-      onChanged()
+      await api.put(`/api/projects/${project.id}/sheets`, { url, worksheet: worksheet || null })
+      // No parent reload here: it would unmount this modal mid-flow. The saved
+      // tab is read back from the API on the next workspace refresh.
+      toast('Google Sheets terhubung dengan tab terpilih.')
     } catch (err: any) {
       setError(err?.message ?? 'Gagal menghubungkan sheet.')
     } finally {
@@ -741,7 +1138,9 @@ function SheetModal({
     setBusy(true)
     setError(null)
     try {
-      const res = await api.post(`/api/projects/${project.id}/sheets/preview`, { dedupeField })
+      const res = await api.post(`/api/projects/${project.id}/sheets/preview`, {
+        dedupeField, url, worksheet,
+      })
       setPreview(res)
     } catch (err: any) {
       setError(err?.message ?? 'Pratinjau gagal.')
@@ -754,10 +1153,17 @@ function SheetModal({
     setBusy(true)
     setError(null)
     try {
-      const res = await api.post<{ inserted: number; updated: number; skipped: number }>(`/api/projects/${project.id}/sheets/sync`, {
-        dedupeField, conflictPolicy,
+      const res = await api.post<{
+        inserted: number; updated: number; skipped: number; reset?: boolean
+        removedColumns?: number; removedRows?: number
+      }>(`/api/projects/${project.id}/sheets/sync`, {
+        dedupeField, conflictPolicy, worksheet, mode: syncMode,
       })
-      toast(`Sinkronisasi selesai: +${res.inserted} / ~${res.updated}`)
+      toast(
+        res.reset
+          ? `Reset selesai: ${res.removedColumns ?? 0} kolom & ${res.removedRows ?? 0} baris lama dibersihkan, ${res.inserted} baris dimuat ulang.`
+          : `Sinkronisasi selesai: +${res.inserted} / ~${res.updated}`,
+      )
       setPreview(null)
       onChanged()
     } catch (err: any) {
@@ -796,6 +1202,49 @@ function SheetModal({
           </div>
         </Field>
 
+        <div className="space-y-3 rounded-2xl border border-line bg-canvas/40 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="label">Pilih tab sheet</p>
+              <p className="mt-0.5 text-[11px] text-muted">Impor hanya dari tab yang dipilih, bukan tab pertama spreadsheet.</p>
+            </div>
+            <button className="btn-secondary btn-sm" onClick={() => loadTabs()} disabled={tabsBusy || !url.trim()}>
+              {tabsBusy ? <Spinner /> : <RefreshCw className="h-3.5 w-3.5" />} Muat Daftar Sheet
+            </button>
+          </div>
+          {tabs.length > 0 ? (
+            <Field label="Pilih sheet" hint={tabNotice ?? `${tabs.length} tab terdeteksi. Gid pada tautan otomatis terpilih.`}>
+              <select className="input" value={worksheet} onChange={(e) => { setWorksheet(e.target.value); setPreview(null) }} disabled={!canManage}>
+                <option value="">— pilih tab —</option>
+                {tabs.map((tab) => (
+                  <option key={tab.gid || tab.name} value={tab.gid || tab.name}>{tab.name}</option>
+                ))}
+              </select>
+            </Field>
+          ) : (
+            <p className="rounded-xl bg-white px-3 py-2 text-[11px] text-muted">
+              {tabNotice ?? 'Klik “Muat Daftar Sheet” untuk membaca daftar tab dari spreadsheet.'}
+            </p>
+          )}
+          <Field label="Atau ketik nama tab sheet secara manual" hint="Berguna bila daftar tab dibatasi pengaturan berbagi Google.">
+            <div className="flex gap-2">
+              <input
+                className="input"
+                value={manualTab}
+                onChange={(e) => setManualTab(e.target.value)}
+                placeholder="Mis. ALL BIBIT"
+                disabled={!canManage}
+              />
+              <button className="btn-secondary shrink-0" onClick={useManualTab} disabled={!manualTab.trim() || !canManage}>Gunakan</button>
+            </div>
+          </Field>
+          {worksheet && (
+            <p className="text-[11px]">
+              <span className="chip chip-active">Tab aktif: {tabs.find((tab) => (tab.gid || tab.name) === worksheet)?.name ?? worksheet}</span>
+            </p>
+          )}
+        </div>
+
         {sheet && (
           <div className="rounded-xl border border-line bg-canvas/50 px-3 py-2.5 text-xs">
             <p className="text-ink">Status: {sheet.status ?? 'terhubung'}</p>
@@ -803,22 +1252,50 @@ function SheetModal({
           </div>
         )}
 
-        <div className="field-grid">
-          <Field label="Kolom kunci duplikat">
-            <select className="input" value={dedupeField} onChange={(e) => setDedupeField(e.target.value)}>
-              <option value="">— tanpa kunci —</option>
-              {fields.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
-            </select>
-          </Field>
-          <Field label="Jika terjadi konflik" hint="Data lokal tidak akan ditimpa tanpa persetujuan.">
-            <select className="input" value={conflictPolicy} onChange={(e) => setConflictPolicy(e.target.value as any)}>
-              <option value="remote">Gunakan nilai dari sheet (remote)</option>
-              <option value="local">Pertahankan nilai lokal</option>
-            </select>
-          </Field>
+        <div>
+          <p className="label mb-1.5">Mode sinkronisasi</p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <button
+              className={cn('rounded-xl border p-3 text-left', syncMode === 'merge' ? 'border-forest/40 bg-forest-50/40' : 'border-line bg-white')}
+              onClick={() => setSyncMode('merge')}
+              disabled={!canManage}
+            >
+              <span className="block text-xs font-medium text-ink">Perbarui &amp; Tambah Baris (Merge)</span>
+              <span className="mt-0.5 block text-[10px] text-muted">Memperbarui baris yang cocok lewat kolom kunci, lalu menambah baris baru.</span>
+            </button>
+            <button
+              className={cn('rounded-xl border p-3 text-left', syncMode === 'reset' ? 'border-red-300 bg-red-50/60' : 'border-line bg-white')}
+              onClick={() => setSyncMode('reset')}
+              disabled={!canManage}
+            >
+              <span className="block text-xs font-medium text-ink">Ganti Semua Kolom &amp; Data (Reset Bersih)</span>
+              <span className="mt-0.5 block text-[10px] text-muted">Menghapus kolom dan baris lama, lalu membangun ulang dari tab terpilih.</span>
+            </button>
+          </div>
         </div>
 
-        <button className="btn-secondary w-full" onClick={runPreview} disabled={busy || !sheet}>
+        {syncMode === 'merge' ? (
+          <div className="field-grid">
+            <Field label="Kolom kunci duplikat">
+              <select className="input" value={dedupeField} onChange={(e) => setDedupeField(e.target.value)}>
+                <option value="">— tanpa kunci —</option>
+                {fields.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
+              </select>
+            </Field>
+            <Field label="Jika terjadi konflik" hint="Data lokal tidak akan ditimpa tanpa persetujuan.">
+              <select className="input" value={conflictPolicy} onChange={(e) => setConflictPolicy(e.target.value as any)}>
+                <option value="remote">Gunakan nilai dari sheet (remote)</option>
+                <option value="local">Pertahankan nilai lokal</option>
+              </select>
+            </Field>
+          </div>
+        ) : (
+          <p className="rounded-xl border border-red-200 bg-red-50/60 px-3 py-2 text-[11px] text-red-800">
+            Mode reset akan menghapus seluruh kolom &amp; baris tabel ini sebelum memuat ulang tab terpilih. Tindakan ini tidak dapat dibatalkan.
+          </p>
+        )}
+
+        <button className="btn-secondary w-full" onClick={runPreview} disabled={busy || !url.trim()}>
           {busy ? <Spinner /> : <RefreshCw className="h-4 w-4" />} Pratinjau perubahan
         </button>
 
