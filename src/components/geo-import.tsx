@@ -1,8 +1,8 @@
 import { useRef, useState } from 'react'
-import * as XLSX from 'xlsx'
 import { CheckCircle2, FileUp, MapPin } from 'lucide-react'
 import { api } from '../lib/api'
 import { featuresFromRows, parseGeoJson, parseKml, type GeoFeature } from '../lib/geo'
+import { workbookSheets } from '../lib/sheet-rows'
 import { Field, Modal, Spinner, cn } from './ui'
 import { useApp } from '../lib/app-context'
 
@@ -43,9 +43,9 @@ export function GeoImportModal({
       if (/\.kml$/i.test(file.name)) parsed = parseKml(text)
       else if (/\.(geojson|json)$/i.test(file.name)) parsed = parseGeoJson(text)
       else {
-        const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' })
-        const rows = XLSX.utils.sheet_to_json<Record<string, string>>(workbook.Sheets[workbook.SheetNames[0]], { defval: '', raw: false })
-        parsed = featuresFromRows(rows)
+        // Hyperlink-aware: a "📍 MAP" cell yields its real Google Maps URL.
+        const sheets = workbookSheets(await file.arrayBuffer())
+        parsed = featuresFromRows(sheets[0]?.rows ?? [])
       }
       if (!parsed.length) {
         setError('Tidak ada fitur geografis yang ditemukan pada berkas ini.')

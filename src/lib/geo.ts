@@ -26,6 +26,28 @@ export function extractMapsUrl(value: string | null | undefined): string | undef
   return anyUrl ? anyUrl[0] : undefined
 }
 
+/** Reads a lat/lng pair from a Google Maps URL (or a plain "lat, lng" value). */
+export function coordinatesFromMapsUrl(value: string | null | undefined): { lat: number; lng: number } | null {
+  const raw = String(value ?? '').trim()
+  if (!raw) return null
+  const patterns = [
+    /@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
+    /[?&](?:q|query|ll|center|destination|daddr)=(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/i,
+    /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/,
+    /^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/,
+  ]
+  for (const pattern of patterns) {
+    const match = raw.match(pattern)
+    if (!match) continue
+    const lat = Number(match[1])
+    const lng = Number(match[2])
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue
+    if (Math.abs(lat) > 90 || Math.abs(lng) > 180) continue
+    return { lat, lng }
+  }
+  return null
+}
+
 export function normalizeMapsUrl(value: string | null | undefined): string | undefined {
   const raw = String(value ?? '').trim()
   if (!raw) return undefined
@@ -133,15 +155,26 @@ export function featuresFromRows(rows: Record<string, string>[]): GeoFeature[] {
     for (const [key, value] of Object.entries(row)) normalized[key.toLowerCase().trim()] = value
     const name = NAME_KEYS.map((k) => normalized[k]).find(Boolean) || 'Tanpa nama'
     const description = DESC_KEYS.map((k) => normalized[k]).find(Boolean)
-    // A maps column wins; otherwise a maps URL inside the description still works.
-    const googleMapsUrl = normalizeMapsUrl(
-      MAPS_URL_KEYS.map((k) => normalized[k]).find((v) => v !== undefined && v !== '')
-        ?? extractMapsUrl(description),
-    )
+    // A maps column wins; otherwise any cell carrying a maps link (e.g. the
+    // KOORDINAT column with a "📍 MAP" hyperlink) or the description still works.
+    const knownMaps = MAPS_URL_KEYS.map((k) => normalized[k]).find((v) => v !== undefined && v !== '')
+    const scannedMaps = Object.values(normalized).map((value) => extractMapsUrl(value)).find(Boolean)
+    const googleMapsUrl = normalizeMapsUrl(knownMaps ?? scannedMaps ?? extractMapsUrl(description))
     const latRaw = LAT_KEYS.map((k) => normalized[k]).find((v) => v !== undefined && v !== '')
     const lngRaw = LNG_KEYS.map((k) => normalized[k]).find((v) => v !== undefined && v !== '')
-    const lat = Number(String(latRaw ?? '').replace(',', '.'))
-    const lng = Number(String(lngRaw ?? '').replace(',', '.'))
+    // Empty cells must stay empty: Number('') is 0 and would put every row at 0,0.
+    const toCoordinate = (raw: string | undefined) => {
+      const text = String(raw ?? '').trim()
+      return text ? Number(text.replace(',', '.')) : NaN
+    }
+    let lat = toCoordinate(latRaw)
+    let lng = toCoordinate(lngRaw)
+    // Sheets often only carry a Google Maps hyperlink (e.g. "📍 MAP"); derive the
+    // point from the URL so those rows still land on the map.
+    if ((!Number.isFinite(lat) || !Number.isFinite(lng)) && googleMapsUrl) {
+      const fromUrl = coordinatesFromMapsUrl(googleMapsUrl)
+      if (fromUrl) { lat = fromUrl.lat; lng = fromUrl.lng }
+    }
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
       return { name, description, googleMapsUrl, type: 'point' as const, geometry: { type: 'Point', coordinates: [] }, valid: false, reason: 'Koordinat tidak ditemukan / bukan angka' }
     }
