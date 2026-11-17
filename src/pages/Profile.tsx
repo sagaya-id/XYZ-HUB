@@ -12,10 +12,12 @@ const PREF_LABELS: Record<string, string> = {
   'project.removed': 'Akses proyek dicabut',
   'task.assigned': 'Tugas baru / penugasan',
   'task.due': 'Pengingat tenggat tugas',
+  'project.milestone': 'Pengingat milestone proyek',
   'calendar.created': 'Agenda baru / pengingat',
   'calendar.updated': 'Perubahan agenda',
   'calendar.cancelled': 'Pembatalan agenda',
   'budget.updated': 'Perubahan anggaran',
+  'chat.message': 'Pesan obrolan tim',
 }
 
 export function ProfilePage() {

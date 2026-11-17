@@ -51,6 +51,20 @@ export function CalendarPage() {
   const [detail, setDetail] = useState<EventItem | null>(null)
   const [categoriesOpen, setCategoriesOpen] = useState(false)
 
+  // Day view steps exactly one calendar day in both directions — no weekend
+  // skipping — and keeps the selected-day panel on the same date.
+  function go(direction: number) {
+    const next = shift(anchor, view, direction)
+    setAnchor(next)
+    if (view === 'day') setSelectedDay(next)
+  }
+
+  function goToday() {
+    const today = todayIso()
+    setAnchor(today)
+    setSelectedDay(today)
+  }
+
   const range = useMemo(() => rangeFor(view, anchor), [view, anchor])
   const { data, loading, reload } = useAsync<{ events: EventItem[]; categories: EventCategory[] }>(
     () => api.get(`/api/events?entity=${entity}&from=${range.from}T00:00&to=${range.to}T23:59${projectIds.length ? `&projectIds=${projectIds.join(',')}` : ''}`),
@@ -112,18 +126,21 @@ export function CalendarPage() {
       <div className="mb-4 card p-3.5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-2">
-            <button className="rounded-full border border-line p-2 text-muted hover:bg-canvas" onClick={() => setAnchor(shift(anchor, view, -1))} aria-label="Sebelumnya">
+            <button className="rounded-full border border-line p-2 text-muted hover:bg-canvas" onClick={() => go(-1)} aria-label="Sebelumnya">
               <ChevronLeft className="h-4 w-4" />
             </button>
-            <button className="btn-secondary btn-sm" onClick={() => setAnchor(todayIso())}>Hari ini</button>
-            <button className="rounded-full border border-line p-2 text-muted hover:bg-canvas" onClick={() => setAnchor(shift(anchor, view, 1))} aria-label="Berikutnya">
+            <button className="btn-secondary btn-sm" onClick={goToday}>Hari ini</button>
+            <button className="rounded-full border border-line p-2 text-muted hover:bg-canvas" onClick={() => go(1)} aria-label="Berikutnya">
               <ChevronRight className="h-4 w-4" />
             </button>
             <h2 className="ml-1 text-sm font-semibold text-ink sm:text-base">{periodLabel}</h2>
           </div>
           <Segmented
             value={view}
-            onChange={(value) => setView(value)}
+            onChange={(value) => {
+              setView(value)
+              if (value === 'day') setSelectedDay(anchor)
+            }}
             options={[
               { value: 'day', label: 'Hari' },
               { value: 'week', label: 'Minggu' },

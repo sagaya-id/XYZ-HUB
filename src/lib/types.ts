@@ -46,6 +46,9 @@ export type BrandingEntity = {
   headline: string
   slogan: string
   description: string
+  homeHeadline?: string
+  homeSubtitle?: string
+  homeAnnouncement?: string
   cardPhotoFileId: string | null
   cardPhotoUrl: string
   bannerFileId: string | null
@@ -100,6 +103,7 @@ export type Member = {
   role: Role
   access: 'admin' | 'member'
   is_primary_pic: number
+  is_active?: number
   job_title: string | null
   avatar_url: string | null
   joined_at: string
@@ -145,7 +149,7 @@ export type Task = {
   board_id: string
   title: string
   description: string | null
-  priority: 'tinggi' | 'normal' | 'rendah'
+  priority: 'mendesak' | 'tinggi' | 'normal' | 'rendah'
   due_date: string | null
   assignee_id: string | null
   assignee_name: string | null
@@ -204,6 +208,8 @@ export type GeoLocation = {
   geojson: { type: string; coordinates: any }
   lon: number | null
   lat: number | null
+  google_maps_url: string | null
+  maps_url?: string | null
   visibility: 'team' | 'entity'
   photos?: { id: string; file_id: string; url: string; caption: string | null }[]
   logbook_count?: number
@@ -231,6 +237,20 @@ export type Logbook = {
   photos: { id: string; file_id: string; url: string }[]
   created_at: string
   created_by: string | null
+}
+
+export type GalleryPhoto = {
+  id: string
+  project_id: string
+  file_id: string
+  url: string
+  photo_date: string
+  visibility: 'team' | 'entity'
+  created_by: string | null
+  created_at: string
+  uploader_name: string | null
+  uploader_avatar_url: string | null
+  can_delete: boolean
 }
 
 export type Note = {
@@ -277,6 +297,77 @@ export type SheetLink = {
   worksheet: string | null
   last_sync_at: string | null
   status: string | null
+}
+
+export type ReminderSource = 'event' | 'task' | 'project' | 'manual'
+export type ReminderItem = {
+  id: string
+  source: ReminderSource
+  title: string
+  body: string | null
+  date: string
+  time: string | null
+  link: string | null
+  project_id: string | null
+  project_title?: string | null
+  urgent: boolean
+  done?: boolean
+}
+
+export type ChatPeer = {
+  id: string
+  name: string
+  role: Role
+  job_title: string | null
+  avatar_id: string | null
+  avatar_url: string | null
+  is_active?: number
+}
+
+export type ChatAttachment = {
+  id: string
+  name: string
+  mime: string
+  size: number
+  is_image: boolean
+  url: string
+  download_url: string
+}
+
+export type ChatChannel = {
+  key: string
+  conversation_id: string
+  kind: 'entity' | 'project' | 'direct'
+  project_id: string | null
+  name: string
+  code: string | null
+  unread: number
+  peer: ChatPeer | null
+  is_read_only: boolean
+  sections: 'project' | 'direct'
+  peer_last_read_at: string | null
+  last_message: {
+    body: string
+    created_at: string
+    user_name: string | null
+    user_id?: string | null
+    attachment_count: number
+  } | null
+}
+
+export type ChatMessage = {
+  id: string
+  entity_id: string
+  project_id: string | null
+  conversation_id: string
+  user_id: string
+  body: string
+  created_at: string
+  user_name: string | null
+  user_avatar_url: string | null
+  user_role: Role | null
+  user_job_title: string | null
+  attachments: ChatAttachment[]
 }
 
 export type Notification = {

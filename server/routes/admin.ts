@@ -121,20 +121,62 @@ adminRoutes.patch('/admin/users/:id', async (c) => {
   return c.json({ user: publicUser(await one<any>(c.env.DB, `SELECT * FROM users WHERE id = ?`, target.id)) })
 })
 
-adminRoutes.delete('/admin/users/:id', async (c) => {
+/**
+ * Deactivate / reactivate without deleting anything (used by MA, SA and PA in
+ * their own scope). Kept separate from permanent deletion so history survives.
+ */
+adminRoutes.post('/admin/users/:id/status', async (c) => {
   const user = c.get('user')
   assertRole(user, ['MA', 'SA'])
   const target = await one<any>(c.env.DB, `SELECT * FROM users WHERE id = ?`, c.req.param('id'))
   if (!target) return c.json({ error: 'Pengguna tidak ditemukan.' }, 404)
   if (target.id === user.id) return c.json({ error: 'Anda tidak dapat menonaktifkan akun sendiri.' }, 400)
-  if (user.role === 'SA' && (target.role === 'MA' || target.entity_id !== user.entity_id)) {
-    throw new HttpError(403, 'Tidak diizinkan.')
+  if (user.role === 'SA') {
+    if (target.role === 'MA') throw new HttpError(403, 'Super Admin tidak dapat mengubah Master Admin.')
+    if (target.entity_id !== user.entity_id) throw new HttpError(403, 'Pengguna berada di entitas lain.')
   }
-  // Deactivation revokes access but keeps every historical record intact.
-  await run(c.env.DB, `UPDATE users SET is_active = 0 WHERE id = ?`, target.id)
+  const body = await c.req.json().catch(() => ({}))
+  const active = body.active !== false
+  await run(c.env.DB, `UPDATE users SET is_active = ? WHERE id = ?`, active ? 1 : 0, target.id)
+  if (!active) await run(c.env.DB, `DELETE FROM sessions WHERE user_id = ?`, target.id)
+  await audit(
+    c.env, user, active ? 'user.reactivated' : 'user.deactivated', 'user', target.id,
+    `${active ? 'Mengaktifkan kembali' : 'Menonaktifkan'} akun ${target.name}`, target.entity_id,
+  )
+  return c.json({ ok: true, is_active: active ? 1 : 0 })
+})
+
+adminRoutes.delete('/admin/users/:id', async (c) => {
+  const user = c.get('user')
+  assertRole(user, ['MA', 'SA'])
+  const target = await one<any>(c.env.DB, `SELECT * FROM users WHERE id = ?`, c.req.param('id'))
+  if (!target) return c.json({ error: 'Pengguna tidak ditemukan.' }, 404)
+  if (target.id === user.id) return c.json({ error: 'Anda tidak dapat menghapus akun sendiri.' }, 400)
+  if (user.role === 'SA') {
+    if (target.role === 'MA') throw new HttpError(403, 'Super Admin tidak dapat menghapus Master Admin.')
+    if (target.entity_id !== user.entity_id) throw new HttpError(403, 'Pengguna berada di entitas lain.')
+  }
+  if (target.role === 'MA') {
+    const masters = await one<any>(c.env.DB, `SELECT COUNT(*) AS n FROM users WHERE role = 'MA' AND is_active = 1`)
+    if ((masters?.n ?? 0) <= 1) throw new HttpError(400, 'Minimal satu Master Admin aktif harus tersedia.')
+  }
+  // Permanent removal: credentials, sessions, memberships and personal
+  // reminders go away. Historical project records keep their stored author id
+  // and the audit log keeps the human-readable name.
   await run(c.env.DB, `DELETE FROM sessions WHERE user_id = ?`, target.id)
-  await audit(c.env, user, 'user.deactivated', 'user', target.id, `Menonaktifkan akun ${target.name}`, target.entity_id)
-  return c.json({ ok: true })
+  await run(c.env.DB, `DELETE FROM project_members WHERE user_id = ?`, target.id)
+  await run(c.env.DB, `DELETE FROM notifications WHERE user_id = ?`, target.id)
+  await run(c.env.DB, `DELETE FROM notification_prefs WHERE user_id = ?`, target.id)
+  await run(c.env.DB, `DELETE FROM reminder_settings WHERE user_id = ?`, target.id)
+  await run(c.env.DB, `DELETE FROM reminders WHERE user_id = ?`, target.id)
+  await run(c.env.DB, `UPDATE project_members SET added_by = NULL WHERE added_by = ?`, target.id)
+  await run(c.env.DB, `DELETE FROM users WHERE id = ?`, target.id)
+  await audit(
+    c.env, user, 'user.deleted', 'user', target.id,
+    `Menghapus permanen akun ${target.name} (${target.email})`, target.entity_id,
+    { email: target.email, role: target.role },
+  )
+  return c.json({ ok: true, deleted: true })
 })
 
 adminRoutes.post('/admin/users/import', async (c) => {

@@ -149,6 +149,7 @@ export const SCHEMA: string[] = [
     lon REAL,
     lat REAL,
     visibility TEXT NOT NULL DEFAULT 'entity' CHECK (visibility IN ('team','entity')),
+    google_maps_url TEXT,
     created_by TEXT,
     created_at TEXT NOT NULL
   )`,
@@ -290,10 +291,64 @@ export const SCHEMA: string[] = [
     visibility TEXT NOT NULL DEFAULT 'entity',
     created_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS reminders (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    project_id TEXT,
+    title TEXT NOT NULL,
+    body TEXT,
+    remind_at TEXT NOT NULL,
+    done_at TEXT,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS reminder_settings (
+    user_id TEXT PRIMARY KEY,
+    lead_days INTEGER NOT NULL DEFAULT 3,
+    updated_at TEXT NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS holidays (
     date TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     source TEXT NOT NULL DEFAULT 'verified'
+  )`,
+  `CREATE TABLE IF NOT EXISTS chat_conversations (
+    id TEXT PRIMARY KEY,
+    entity_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('entity','project','direct')),
+    project_id TEXT,
+    channel_key TEXT NOT NULL,
+    user_a TEXT,
+    user_b TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (entity_id, channel_key)
+  )`,
+  `CREATE TABLE IF NOT EXISTS chat_attachments (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    message_id TEXT,
+    uploaded_by TEXT NOT NULL,
+    object_key TEXT NOT NULL,
+    name TEXT NOT NULL,
+    mime TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS chat_messages (
+    id TEXT PRIMARY KEY,
+    entity_id TEXT NOT NULL,
+    project_id TEXT,
+    user_id TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    deleted_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS chat_reads (
+    user_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    channel_key TEXT NOT NULL,
+    last_read_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, entity_id, channel_key)
   )`,
   `CREATE TABLE IF NOT EXISTS audit_log (
     id TEXT PRIMARY KEY,
@@ -317,6 +372,12 @@ export const SCHEMA: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_logbooks_project ON logbooks(project_id, visit_date)`,
   `CREATE INDEX IF NOT EXISTS idx_records_project ON data_records(project_id)`,
   `CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_reminders_user ON reminders(user_id, remind_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_chat_entity ON chat_messages(entity_id, project_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_chat_reads_user ON chat_reads(user_id, entity_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_chat_conv_entity ON chat_conversations(entity_id, kind)`,
+  `CREATE INDEX IF NOT EXISTS idx_chat_attach_message ON chat_attachments(message_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_chat_attach_conversation ON chat_attachments(conversation_id, message_id)`,
 ]
 
 // Raw SQL file used for the optional local `wrangler d1 execute` path.

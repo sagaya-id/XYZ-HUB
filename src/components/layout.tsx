@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
-  Bell, Building2, CalendarDays, CheckCheck, ChevronDown, Home, LayoutGrid, LogOut, MapPinned,
-  MoreHorizontal, Settings, ShieldCheck, User as UserIcon, X,
+  AlarmClock, Bell, Building2, CalendarDays, CheckCheck, ChevronDown, Home, LayoutGrid, LogOut, MapPinned,
+  MessagesSquare, MoreHorizontal, Settings, ShieldCheck, User as UserIcon, X,
 } from 'lucide-react'
 import { useApp } from '../lib/app-context'
 import { api } from '../lib/api'
@@ -23,6 +23,7 @@ export function AppShell() {
   const [bellOpen, setBellOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
+  const [chatUnread, setChatUnread] = useState(0)
   const bellRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -41,6 +42,27 @@ export function AppShell() {
 
   useEffect(() => {
     if (!me) return
+    let alive = true
+    const load = async () => {
+      try {
+        const data = await api.get<{ unread: number }>(`/api/chat/unread?entity=${entityKey}`)
+        if (alive) setChatUnread(data.unread)
+      } catch {
+        /* ignore when signed out */
+      }
+    }
+    load()
+    const timer = setInterval(load, 20_000)
+    window.addEventListener('focus', load)
+    return () => {
+      alive = false
+      clearInterval(timer)
+      window.removeEventListener('focus', load)
+    }
+  }, [me, entityKey, location.pathname])
+
+  useEffect(() => {
+    if (!me) return
     if (me.user.role !== 'MA' && me.entity?.key && me.entity.key !== entityKey) {
       navigate(`/app/${me.entity.key}${location.pathname.split('/').slice(3).join('/') ? `/${location.pathname.split('/').slice(3).join('/')}` : '/home'}`, { replace: true })
     }
@@ -52,6 +74,8 @@ export function AppShell() {
     if (path.endsWith('/projects')) return 'Katalog Proyek'
     if (path.endsWith('/locations')) return 'Peta Lokasi'
     if (path.endsWith('/calendar')) return 'Kalender'
+    if (path.endsWith('/chat')) return 'Obrolan Tim'
+    if (path.endsWith('/reminders')) return 'Pengingat'
     if (path.endsWith('/admin')) return 'Administrasi'
     if (path.endsWith('/profile')) return 'Profil Saya'
     return 'Home'
@@ -67,11 +91,13 @@ export function AppShell() {
   if (!me) return <Navigate to="/login" replace />
   if (!entity) return <Navigate to={`/app/${me.entity?.key ?? 'yayasan'}/home`} replace />
 
-  const nav = [
+  const nav: { to: string; label: string; icon: any; badge?: number }[] = [
     { to: `/app/${entityKey}/home`, label: 'Home', icon: Home },
     { to: `/app/${entityKey}/projects`, label: 'Proyek', icon: LayoutGrid },
+    { to: `/app/${entityKey}/chat`, label: 'Obrolan', icon: MessagesSquare, badge: chatUnread },
     { to: `/app/${entityKey}/locations`, label: 'Lokasi', icon: MapPinned },
     { to: `/app/${entityKey}/calendar`, label: 'Kalender', icon: CalendarDays },
+    { to: `/app/${entityKey}/reminders`, label: 'Pengingat', icon: AlarmClock },
   ]
   if (isAdmin) nav.push({ to: `/app/${entityKey}/admin`, label: 'Administrasi', icon: ShieldCheck })
 
@@ -122,6 +148,11 @@ export function AppShell() {
               >
                 <item.icon className="h-4 w-4" />
                 {item.label}
+                {item.badge ? (
+                  <span className="ml-auto rounded-full bg-forest px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                    {item.badge > 9 ? '9+' : item.badge}
+                  </span>
+                ) : null}
               </NavLink>
             ))}
           </nav>
@@ -164,6 +195,22 @@ export function AppShell() {
               <div className="flex items-center gap-1.5 sm:gap-2">
                 <Link to={`/app/${entityKey}/calendar`} className="hidden rounded-full p-2.5 text-muted hover:bg-sand hover:text-ink sm:block" title="Kalender">
                   <CalendarDays className="h-4 w-4" />
+                </Link>
+                <Link to={`/app/${entityKey}/reminders`} className="hidden rounded-full p-2.5 text-muted hover:bg-sand hover:text-ink sm:block" title="Pengingat">
+                  <AlarmClock className="h-4 w-4" />
+                </Link>
+                <Link
+                  to={`/app/${entityKey}/chat`}
+                  className="relative rounded-full p-2.5 text-muted transition-colors hover:bg-sand hover:text-forest"
+                  title={chatUnread > 0 ? `Obrolan tim · ${chatUnread} pesan belum dibaca` : 'Obrolan tim'}
+                  aria-label="Obrolan tim"
+                >
+                  <MessagesSquare className="h-4 w-4" />
+                  {chatUnread > 0 && (
+                    <span className="absolute -top-0.5 -right-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-forest px-1 text-[9px] font-bold text-white ring-2 ring-white">
+                      {chatUnread > 9 ? '9+' : chatUnread}
+                    </span>
+                  )}
                 </Link>
                 <div className="relative" ref={bellRef}>
                   <button
@@ -231,7 +278,7 @@ export function AppShell() {
       {/* Mobile bottom navigation */}
       <div className="fixed inset-x-0 bottom-0 z-[600] border-t border-line glass pb-[env(safe-area-inset-bottom)] lg:hidden">
         <div className="flex items-stretch">
-          {nav.slice(0, 4).map((item) => (
+          {nav.filter((item) => ['Home', 'Proyek', 'Kalender', 'Pengingat'].includes(item.label)).map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -253,8 +300,17 @@ export function AppShell() {
 
       <Modal open={moreOpen} onClose={() => setMoreOpen(false)} title="Menu lainnya" placement="bottom">
         <div className="space-y-2">
+          <Link to={`/app/${entityKey}/chat`} onClick={() => setMoreOpen(false)} className="nav-item border border-line">
+            <MessagesSquare className="h-4 w-4" /> Obrolan tim
+            {chatUnread > 0 && (
+              <span className="ml-auto rounded-full bg-forest px-1.5 py-0.5 text-[10px] font-semibold text-white">{chatUnread}</span>
+            )}
+          </Link>
           <Link to={`/app/${entityKey}/calendar`} onClick={() => setMoreOpen(false)} className="nav-item border border-line">
             <CalendarDays className="h-4 w-4" /> Kalender & agenda
+          </Link>
+          <Link to={`/app/${entityKey}/reminders`} onClick={() => setMoreOpen(false)} className="nav-item border border-line">
+            <AlarmClock className="h-4 w-4" /> Pengingat & tenggat
           </Link>
           {isAdmin && (
             <Link to={`/app/${entityKey}/admin`} onClick={() => setMoreOpen(false)} className="nav-item border border-line">

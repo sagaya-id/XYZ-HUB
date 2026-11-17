@@ -741,6 +741,53 @@ async function seedAll(env: Env) {
   }
 }
 
+type ChatSeed = { id: string; entity: 'yayasan' | 'store'; project: string | null; user: string; body: string; minutesAgo: number }
+
+const CHAT_SEEDS: ChatSeed[] = [
+  { id: 'cht_seed_y1', entity: 'yayasan', project: null, user: 'sari', body: 'Selamat pagi tim, mohon rekap logbook minggu ini diunggah sebelum Jumat ya.', minutesAgo: 320 },
+  { id: 'cht_seed_y2', entity: 'yayasan', project: null, user: 'rina', body: 'Baik Bu, logbook SDN 03 dan Bedono sudah masuk. Tinggal verifikasi foto lapangan.', minutesAgo: 286 },
+  { id: 'cht_seed_y3', entity: 'yayasan', project: null, user: 'siti', body: 'Foto monitoring sudah saya unggah. Tindak lanjut pelindung bambu dijadwalkan besok.', minutesAgo: 250 },
+  { id: 'cht_seed_y4', entity: 'yayasan', project: null, user: 'dimas', body: 'Saya tambahkan agenda verifikasi pengiriman buku minggu depan di kalender entitas.', minutesAgo: 190 },
+  { id: 'cht_seed_y5', entity: 'yayasan', project: null, user: 'sari', body: 'Terima kasih semua. Rapat koordinasi tetap Kamis pukul 10.00 di aula.', minutesAgo: 120 },
+  { id: 'cht_seed_p1a', entity: 'yayasan', project: 'prj_p1', user: 'rina', body: 'Distribusi buku paket semester genap butuh kendaraan tambahan. Ada yang bisa cek vendor terdekat?', minutesAgo: 210 },
+  { id: 'cht_seed_p1b', entity: 'yayasan', project: 'prj_p1', user: 'siti', body: 'Saya punya kontak vendor di Cibinong, estimasi Rp1,2 juta pulang pergi untuk 4 sekolah.', minutesAgo: 180 },
+  { id: 'cht_seed_p1c', entity: 'yayasan', project: 'prj_p1', user: 'rina', body: 'Tolong ajukan ke anggaran perjalanan ya, saya setujui hari ini.', minutesAgo: 150 },
+  { id: 'cht_seed_p1d', entity: 'yayasan', project: 'prj_p1', user: 'dimas', body: 'Modul pelatihan guru angkatan ketiga sudah 80%, sisa lembar asesmen diagnostik.', minutesAgo: 60 },
+  { id: 'cht_seed_s1', entity: 'store', project: null, user: 'budi', body: 'Update stok gudang Surabaya mohon dikirim sebelum rapat jam 3 sore.', minutesAgo: 300 },
+  { id: 'cht_seed_s2', entity: 'store', project: null, user: 'agus', body: 'Sudah saya kirim ke email, ringkasan 600 palet per bulan dan proyeksi dua shift.', minutesAgo: 240 },
+  { id: 'cht_seed_s3', entity: 'store', project: null, user: 'dewi', body: 'Renovasi cabang Bandung minggu ini masuk tahap pengecatan area pelanggan.', minutesAgo: 150 },
+  { id: 'cht_seed_s4', entity: 'store', project: null, user: 'budi', body: 'Bagus, tolong dokumentasikan sebelum serah terima dengan kontraktor.', minutesAgo: 90 },
+  { id: 'cht_seed_s5', entity: 'store', project: 'prj_s1', user: 'dewi', body: 'Anggaran renovasi sudah pasti Rp890 juta. Perubahan berikutnya perlu konfirmasi ulang.', minutesAgo: 200 },
+  { id: 'cht_seed_s6', entity: 'store', project: 'prj_s1', user: 'agus', body: 'Catatan lapangan: kusen jendela diganti aluminium, tambahan sekitar Rp12 juta.', minutesAgo: 130 },
+  { id: 'cht_seed_s7', entity: 'store', project: 'prj_s1', user: 'dewi', body: 'Saya catat sebagai usulan dulu, nominal pasti jangan diubah sebelum disetujui.', minutesAgo: 100 },
+]
+
+/** Demo messages for the entity and project chat rooms (separate marker so existing databases get them too). */
+export async function ensureChatSeed(env: Env) {
+  const existing = await one<any>(env.DB, `SELECT value FROM app_config WHERE key = 'seed:chat:v1'`)
+  if (existing) return
+  try {
+    await run(env.DB, `INSERT INTO app_config (key, value, updated_at) VALUES ('seed:chat:v1', 'running', ?)`, nowIso())
+  } catch {
+    return
+  }
+  try {
+    for (const item of CHAT_SEEDS) {
+      await run(
+        env.DB,
+        `INSERT OR IGNORE INTO chat_messages (id, entity_id, project_id, user_id, body, created_at)
+         VALUES (?,?,?,?,?,?)`,
+        item.id, `ent_${item.entity}`, item.project, `usr_${item.user}`, item.body,
+        new Date(Date.now() - item.minutesAgo * 60_000).toISOString(),
+      )
+    }
+    await setConfig(env, 'seed:chat:v1', { at: nowIso(), version: 1 })
+  } catch (err) {
+    await run(env.DB, `DELETE FROM app_config WHERE key = 'seed:chat:v1'`)
+    console.error('chat seed failed', err)
+  }
+}
+
 export const DEMO_ACCOUNTS = USERS.map((u) => ({
   email: u.email,
   password: u.password,

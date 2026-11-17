@@ -20,11 +20,27 @@ function geometryCenter(geojson: any): { lon: number | null; lat: number | null 
   return { lon, lat }
 }
 
+function cleanMapsUrl(value: unknown): string | null {
+  const raw = String(value ?? '').trim()
+  if (!raw) return null
+  return /^https?:\/\//i.test(raw) ? raw.slice(0, 1000) : null
+}
+
+/** Saved Google Maps link, else a coordinate fallback the user can open directly. */
+function mapsUrlFor(row: any): string | null {
+  if (row.google_maps_url) return row.google_maps_url
+  if (row.lat !== null && row.lat !== undefined && row.lon !== null && row.lon !== undefined) {
+    return `https://www.google.com/maps?q=${Number(row.lat)},${Number(row.lon)}`
+  }
+  return null
+}
+
 function serializeLocation(row: any, canSeeTeam: boolean) {
   return {
     ...row,
     geojson: parseJson<any>(row.geojson, null),
     photos: [],
+    maps_url: mapsUrlFor(row),
     restricted: row.visibility === 'team' && !canSeeTeam,
   }
 }
@@ -106,11 +122,12 @@ locationRoutes.post('/locations', async (c) => {
   const id = uid('loc_')
   await run(
     c.env.DB,
-    `INSERT INTO locations (id, entity_id, project_id, name, description, type, geojson, lon, lat, visibility, created_by, created_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT INTO locations (id, entity_id, project_id, name, description, type, geojson, lon, lat, visibility, google_maps_url, created_by, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     id, project.entity_id, project.id, name, body.description ?? null, type,
     JSON.stringify({ type: geometry.type, coordinates: geometry.coordinates }),
-    center.lon, center.lat, body.visibility === 'team' ? 'team' : 'entity', user.id, nowIso(),
+    center.lon, center.lat, body.visibility === 'team' ? 'team' : 'entity',
+    cleanMapsUrl(body.googleMapsUrl ?? body.gmapsLink), user.id, nowIso(),
   )
   if (Array.isArray(body.photoIds)) {
     for (const fileId of body.photoIds) {
@@ -149,13 +166,16 @@ locationRoutes.post('/locations/import', async (c) => {
     }
     const id = uid('loc_')
     const type = geometry.type === 'Point' ? 'point' : geometry.type === 'LineString' ? 'line' : 'polygon'
+    // Explicit link from the file (gmaps / url / KML description) wins; otherwise
+    // the coordinate fallback is generated on read, so the button always works.
+    const importedLink = cleanMapsUrl(f.googleMapsUrl ?? f.mapsUrl ?? f.url)
     await run(
       c.env.DB,
-      `INSERT INTO locations (id, entity_id, project_id, name, description, type, geojson, lon, lat, visibility, created_by, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO locations (id, entity_id, project_id, name, description, type, geojson, lon, lat, visibility, google_maps_url, created_by, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       id, project.entity_id, project.id, String(f.name ?? 'Lokasi tanpa nama'), f.description ?? null, type,
       JSON.stringify({ type: geometry.type, coordinates: geometry.coordinates }),
-      center.lon, center.lat, body.visibility === 'team' ? 'team' : 'entity', user.id, nowIso(),
+      center.lon, center.lat, body.visibility === 'team' ? 'team' : 'entity', importedLink, user.id, nowIso(),
     )
     saved.push(id)
   }
@@ -183,14 +203,44 @@ locationRoutes.patch('/locations/:id', async (c) => {
     lon = center.lon
     lat = center.lat
   }
+  const googleMapsUrl = body.googleMapsUrl !== undefined || body.gmapsLink !== undefined
+    ? cleanMapsUrl(body.googleMapsUrl ?? body.gmapsLink)
+    : loc.google_maps_url
   await run(
     c.env.DB,
-    `UPDATE locations SET name = ?, description = ?, visibility = ?, geojson = ?, lon = ?, lat = ? WHERE id = ?`,
+    `UPDATE locations SET name = ?, description = ?, visibility = ?, geojson = ?, lon = ?, lat = ?, google_maps_url = ? WHERE id = ?`,
     body.name ?? loc.name, body.description !== undefined ? body.description : loc.description,
-    body.visibility ?? loc.visibility, geojson, lon, lat, loc.id,
+    body.visibility ?? loc.visibility, geojson, lon, lat, googleMapsUrl, loc.id,
   )
   await audit(c.env, user, 'location.updated', 'location', loc.id, `Memperbarui lokasi ${body.name ?? loc.name}`, project.entity_id)
   return c.json({ ok: true })
+})
+
+locationRoutes.post('/locations/bulk-delete', async (c) => {
+  const user = c.get('user')
+  const body = await c.req.json().catch(() => ({}))
+  const ids = (Array.isArray(body.ids) ? body.ids : []).map((id: any) => String(id)).filter(Boolean)
+  if (!ids.length) return c.json({ error: 'Tidak ada lokasi yang dipilih.' }, 400)
+  if (ids.length > 500) return c.json({ error: 'Maksimum 500 lokasi per tindakan.' }, 400)
+  let deleted = 0
+  const denied: string[] = []
+  const seen = new Set<string>()
+  for (const id of ids) {
+    if (seen.has(id)) continue
+    seen.add(id)
+    const loc = await one<any>(c.env.DB, `SELECT * FROM locations WHERE id = ?`, id)
+    if (!loc) continue
+    const { project, member } = await loadProject(c.env, user, loc.project_id)
+    if (!isAdminOf(user, project, member)) { denied.push(id); continue }
+    await run(c.env.DB, `UPDATE logbooks SET location_id = NULL WHERE location_id = ?`, loc.id)
+    await run(c.env.DB, `DELETE FROM location_photos WHERE location_id = ?`, loc.id)
+    await run(c.env.DB, `DELETE FROM locations WHERE id = ?`, loc.id)
+    deleted++
+  }
+  if (deleted) {
+    await audit(c.env, user, 'location.bulk_deleted', 'location', null, `Menghapus ${deleted} lokasi sekaligus`, user.entity_id, { requested: ids.length, deleted, denied: denied.length })
+  }
+  return c.json({ deleted, denied })
 })
 
 locationRoutes.delete('/locations/:id', async (c) => {

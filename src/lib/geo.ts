@@ -1,10 +1,38 @@
 export type GeoFeature = {
   name: string
   description?: string
+  googleMapsUrl?: string
   type: 'point' | 'line' | 'polygon'
   geometry: { type: string; coordinates: any }
   valid: boolean
   reason?: string
+}
+
+/** Column names that may carry a Google Maps link in CSV/Excel/Sheets files. */
+export const MAPS_URL_KEYS = [
+  'gmaps', 'gmap', 'google_maps', 'google_maps_url', 'gmaps_link', 'googlemaps',
+  'link_maps', 'maps_link', 'maps_url', 'map_url', 'link_maps', 'url', 'link', 'tautan',
+]
+
+const MAPS_PATTERN = /https?:\/\/[^\s"'<>)]*(?:google\.[a-z.]+\/maps|maps\.google\.[a-z.]+|goo\.gl\/maps|maps\.app\.goo\.gl)[^\s"'<>)]*/i
+
+/** Pull a usable http(s) URL out of arbitrary KML/GeoJSON text. */
+export function extractMapsUrl(value: string | null | undefined): string | undefined {
+  const raw = String(value ?? '').trim()
+  if (!raw) return undefined
+  const maps = raw.match(MAPS_PATTERN)
+  if (maps) return maps[0]
+  const anyUrl = raw.match(/https?:\/\/[^\s"'<>)]+/i)
+  return anyUrl ? anyUrl[0] : undefined
+}
+
+export function normalizeMapsUrl(value: string | null | undefined): string | undefined {
+  const raw = String(value ?? '').trim()
+  if (!raw) return undefined
+  if (/^https?:\/\//i.test(raw)) return raw
+  const extracted = extractMapsUrl(raw)
+  if (extracted) return extracted
+  return undefined
 }
 
 function coordPairs(raw: string): number[][] {
@@ -23,6 +51,15 @@ export function parseKml(text: string): GeoFeature[] {
   return placemarks.map((placemark) => {
     const name = placemark.getElementsByTagNameNS('*', 'name')[0]?.textContent?.trim() || 'Tanpa nama'
     const description = placemark.getElementsByTagNameNS('*', 'description')[0]?.textContent?.trim()
+    // Google Maps links can live in <description>, <ExtendedData><Data> or a
+    // <link>/<href> element — accept whichever is present.
+    const extended = Array.from(placemark.getElementsByTagNameNS('*', 'Data'))
+      .map((data) => `${data.getAttribute('name') ?? ''}:${data.getElementsByTagNameNS('*', 'value')[0]?.textContent ?? ''}`)
+      .join(' ')
+    const href = Array.from(placemark.getElementsByTagNameNS('*', 'href'))
+      .map((node) => node.textContent ?? '')
+      .join(' ')
+    const googleMapsUrl = extractMapsUrl(`${description ?? ''} ${extended} ${href}`)
     const point = placemark.getElementsByTagNameNS('*', 'Point')[0]
     const line = placemark.getElementsByTagNameNS('*', 'LineString')[0]
     const polygon = placemark.getElementsByTagNameNS('*', 'Polygon')[0]
@@ -30,23 +67,23 @@ export function parseKml(text: string): GeoFeature[] {
       if (point) {
         const coords = coordPairs(point.getElementsByTagNameNS('*', 'coordinates')[0]?.textContent ?? '')
         if (!coords.length) throw new Error('Koordinat titik tidak valid')
-        return { name, description, type: 'point' as const, geometry: { type: 'Point', coordinates: coords[0] }, valid: true }
+        return { name, description, googleMapsUrl, type: 'point' as const, geometry: { type: 'Point', coordinates: coords[0] }, valid: true }
       }
       if (line) {
         const coords = coordPairs(line.getElementsByTagNameNS('*', 'coordinates')[0]?.textContent ?? '')
         if (coords.length < 2) throw new Error('Garis membutuhkan minimal 2 koordinat')
-        return { name, description, type: 'line' as const, geometry: { type: 'LineString', coordinates: coords }, valid: true }
+        return { name, description, googleMapsUrl, type: 'line' as const, geometry: { type: 'LineString', coordinates: coords }, valid: true }
       }
       if (polygon) {
         const ring = polygon.getElementsByTagNameNS('*', 'outerBoundaryIs')[0]?.getElementsByTagNameNS('*', 'coordinates')[0]
         const coords = coordPairs(ring?.textContent ?? '')
         if (coords.length < 3) throw new Error('Area membutuhkan minimal 3 koordinat')
-        return { name, description, type: 'polygon' as const, geometry: { type: 'Polygon', coordinates: [coords] }, valid: true }
+        return { name, description, googleMapsUrl, type: 'polygon' as const, geometry: { type: 'Polygon', coordinates: [coords] }, valid: true }
       }
-      return { name, description, type: 'point' as const, geometry: { type: 'Point', coordinates: [] }, valid: false, reason: 'Tidak ada geometri' }
+      return { name, description, googleMapsUrl, type: 'point' as const, geometry: { type: 'Point', coordinates: [] }, valid: false, reason: 'Tidak ada geometri' }
     } catch (err: any) {
       return {
-        name, description, type: 'point' as const,
+        name, description, googleMapsUrl, type: 'point' as const,
         geometry: { type: 'Point', coordinates: [] }, valid: false, reason: err?.message,
       }
     }
@@ -66,17 +103,22 @@ export function parseGeoJson(text: string): GeoFeature[] {
     const geometry = feature.geometry
     const name = feature.properties?.name || feature.properties?.Name || feature.properties?.nama || 'Tanpa nama'
     const description = feature.properties?.description || feature.properties?.deskripsi
+    const properties = feature.properties ?? {}
+    const googleMapsUrl = normalizeMapsUrl(
+      MAPS_URL_KEYS.map((key) => properties[key]).find((value) => value !== undefined && value !== '')
+        ?? extractMapsUrl(description),
+    )
     if (!geometry?.type || !Array.isArray(geometry.coordinates)) {
-      return { name, description, type: 'point' as const, geometry: { type: 'Point', coordinates: [] }, valid: false, reason: 'Geometri tidak didukung' }
+      return { name, description, googleMapsUrl, type: 'point' as const, geometry: { type: 'Point', coordinates: [] }, valid: false, reason: 'Geometri tidak didukung' }
     }
-    if (geometry.type === 'Point') return { name, description, type: 'point' as const, geometry, valid: true }
+    if (geometry.type === 'Point') return { name, description, googleMapsUrl, type: 'point' as const, geometry, valid: true }
     if (geometry.type === 'LineString' || geometry.type === 'MultiLineString') {
-      return { name, description, type: 'line' as const, geometry: geometry.type === 'MultiLineString' ? { type: 'LineString', coordinates: geometry.coordinates[0] } : geometry, valid: true }
+      return { name, description, googleMapsUrl, type: 'line' as const, geometry: geometry.type === 'MultiLineString' ? { type: 'LineString', coordinates: geometry.coordinates[0] } : geometry, valid: true }
     }
     if (geometry.type === 'Polygon' || geometry.type === 'MultiPolygon') {
-      return { name, description, type: 'polygon' as const, geometry: geometry.type === 'MultiPolygon' ? { type: 'Polygon', coordinates: geometry.coordinates[0] } : geometry, valid: true }
+      return { name, description, googleMapsUrl, type: 'polygon' as const, geometry: geometry.type === 'MultiPolygon' ? { type: 'Polygon', coordinates: geometry.coordinates[0] } : geometry, valid: true }
     }
-    return { name, description, type: 'point' as const, geometry, valid: false, reason: `Tipe ${geometry.type} belum didukung` }
+    return { name, description, googleMapsUrl, type: 'point' as const, geometry, valid: false, reason: `Tipe ${geometry.type} belum didukung` }
   })
 }
 
@@ -91,16 +133,21 @@ export function featuresFromRows(rows: Record<string, string>[]): GeoFeature[] {
     for (const [key, value] of Object.entries(row)) normalized[key.toLowerCase().trim()] = value
     const name = NAME_KEYS.map((k) => normalized[k]).find(Boolean) || 'Tanpa nama'
     const description = DESC_KEYS.map((k) => normalized[k]).find(Boolean)
+    // A maps column wins; otherwise a maps URL inside the description still works.
+    const googleMapsUrl = normalizeMapsUrl(
+      MAPS_URL_KEYS.map((k) => normalized[k]).find((v) => v !== undefined && v !== '')
+        ?? extractMapsUrl(description),
+    )
     const latRaw = LAT_KEYS.map((k) => normalized[k]).find((v) => v !== undefined && v !== '')
     const lngRaw = LNG_KEYS.map((k) => normalized[k]).find((v) => v !== undefined && v !== '')
     const lat = Number(String(latRaw ?? '').replace(',', '.'))
     const lng = Number(String(lngRaw ?? '').replace(',', '.'))
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-      return { name, description, type: 'point' as const, geometry: { type: 'Point', coordinates: [] }, valid: false, reason: 'Koordinat tidak ditemukan / bukan angka' }
+      return { name, description, googleMapsUrl, type: 'point' as const, geometry: { type: 'Point', coordinates: [] }, valid: false, reason: 'Koordinat tidak ditemukan / bukan angka' }
     }
     if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-      return { name, description, type: 'point' as const, geometry: { type: 'Point', coordinates: [lng, lat] }, valid: false, reason: 'Koordinat di luar rentang' }
+      return { name, description, googleMapsUrl, type: 'point' as const, geometry: { type: 'Point', coordinates: [lng, lat] }, valid: false, reason: 'Koordinat di luar rentang' }
     }
-    return { name, description, type: 'point' as const, geometry: { type: 'Point', coordinates: [lng, lat] }, valid: true }
+    return { name, description, googleMapsUrl, type: 'point' as const, geometry: { type: 'Point', coordinates: [lng, lat] }, valid: true }
   })
 }
