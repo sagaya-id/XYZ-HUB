@@ -9,6 +9,7 @@ export const notificationRoutes = new Hono<AppEnv>()
 const PREFS = [
   'task.assigned', 'task.due', 'calendar.created', 'calendar.updated', 'calendar.cancelled',
   'project.assigned', 'project.pic', 'project.removed', 'project.milestone', 'budget.updated',
+  'chat.message',
 ]
 
 /**

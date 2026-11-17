@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import {
   ArrowLeft, BarChart3, CalendarRange, ClipboardList, Coins, Database, KanbanSquare, MapPinned,
-  NotebookPen, Settings,
+  MessagesSquare, NotebookPen, Settings,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { useAsync } from '../lib/app-context'
@@ -59,7 +59,16 @@ export function WorkspacePage() {
         <Link to={`/app/${entity}/projects`} className="inline-flex items-center gap-1.5 text-xs font-medium text-muted hover:text-ink">
           <ArrowLeft className="h-3.5 w-3.5" /> Katalog proyek
         </Link>
-        <span className="hidden text-[11px] text-muted sm:block">Diperbarui {formatDate(project.created_at)}</span>
+        <div className="flex items-center gap-3">
+          <span className="hidden text-[11px] text-muted sm:block">Diperbarui {formatDate(project.created_at)}</span>
+          <Link
+            to={`/app/${entity}/chat?project=${project.id}`}
+            className="btn-secondary btn-sm"
+            title="Buka diskusi proyek"
+          >
+            <MessagesSquare className="h-3.5 w-3.5" /> Diskusi proyek
+          </Link>
+        </div>
       </div>
 
       <div className="card overflow-hidden">

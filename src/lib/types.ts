@@ -314,6 +314,62 @@ export type ReminderItem = {
   done?: boolean
 }
 
+export type ChatPeer = {
+  id: string
+  name: string
+  role: Role
+  job_title: string | null
+  avatar_id: string | null
+  avatar_url: string | null
+  is_active?: number
+}
+
+export type ChatAttachment = {
+  id: string
+  name: string
+  mime: string
+  size: number
+  is_image: boolean
+  url: string
+  download_url: string
+}
+
+export type ChatChannel = {
+  key: string
+  conversation_id: string
+  kind: 'entity' | 'project' | 'direct'
+  project_id: string | null
+  name: string
+  code: string | null
+  unread: number
+  peer: ChatPeer | null
+  is_read_only: boolean
+  sections: 'project' | 'direct'
+  peer_last_read_at: string | null
+  last_message: {
+    body: string
+    created_at: string
+    user_name: string | null
+    user_id?: string | null
+    attachment_count: number
+  } | null
+}
+
+export type ChatMessage = {
+  id: string
+  entity_id: string
+  project_id: string | null
+  conversation_id: string
+  user_id: string
+  body: string
+  created_at: string
+  user_name: string | null
+  user_avatar_url: string | null
+  user_role: Role | null
+  user_job_title: string | null
+  attachments: ChatAttachment[]
+}
+
 export type Notification = {
   id: string
   user_id: string

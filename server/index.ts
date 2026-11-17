@@ -4,7 +4,8 @@ import { run, one, q, nowIso, type Env } from './db'
 import { SCHEMA } from './schema'
 import { HttpError } from './scope'
 import { userFromRequest, SESSION_COOKIE, type SessionUser } from './auth'
-import { ensureSeed } from './seed'
+import { ensureChatSeed, ensureSeed } from './seed'
+import { ensureChatInfra } from './chat-infra'
 import { authRoutes } from './routes/auth'
 import { projectRoutes } from './routes/projects'
 import { taskRoutes } from './routes/tasks'
@@ -19,6 +20,7 @@ import { notificationRoutes } from './routes/notifications'
 import { adminRoutes } from './routes/admin'
 import { homeRoutes } from './routes/home'
 import { reminderRoutes } from './routes/reminders'
+import { chatRoutes } from './routes/chat'
 
 const app = new Hono<AppEnv>()
 
@@ -45,6 +47,8 @@ async function boot(env: Env) {
         console.error('locations migration failed', err)
       }
       await ensureSeed(env)
+      await ensureChatSeed(env)
+      await ensureChatInfra(env)
     })().catch((err) => {
       bootPromise = null
       throw err
@@ -106,6 +110,7 @@ app.route('/api', dataRoutes)
 app.route('/api', fileRoutes)
 app.route('/api', notificationRoutes)
 app.route('/api', reminderRoutes)
+app.route('/api', chatRoutes)
 app.route('/api', adminRoutes)
 
 app.all('/api/*', (c) => c.json({ error: 'Endpoint tidak ditemukan.' }, 404))

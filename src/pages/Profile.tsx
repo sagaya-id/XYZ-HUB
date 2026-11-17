@@ -17,6 +17,7 @@ const PREF_LABELS: Record<string, string> = {
   'calendar.updated': 'Perubahan agenda',
   'calendar.cancelled': 'Pembatalan agenda',
   'budget.updated': 'Perubahan anggaran',
+  'chat.message': 'Pesan obrolan tim',
 }
 
 export function ProfilePage() {
