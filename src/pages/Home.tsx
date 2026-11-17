@@ -5,7 +5,7 @@ import {
 import { api } from '../lib/api'
 import { useApp, useAsync } from '../lib/app-context'
 import { formatDate, compactRupiah, formatTime, number, relativeTime, rupiah, todayIso } from '../lib/format'
-import { AreaChart, BarChart, DonutChart } from '../components/charts'
+import { BarChart, DonutChart } from '../components/charts'
 import { Avatar, LoadingBlock, PageHeader, ProgressBar, Stat, cn } from '../components/ui'
 import type { ProjectSummary } from '../lib/types'
 
@@ -73,7 +73,7 @@ export function HomePage() {
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[1.55fr_1fr]">
-        <section className="card p-5">
+        <section className="card flex min-w-0 flex-col p-5">
           <div className="mb-4 flex items-start justify-between gap-3">
             <div>
               <h2 className="section-title">Agenda Terdekat</h2>
@@ -86,12 +86,12 @@ export function HomePage() {
               Belum ada agenda dalam tujuh hari ke depan.
             </div>
           ) : (
-            <div className="space-y-1">
+            <div className="max-h-[16.75rem] space-y-1 overflow-y-auto scroll-smooth">
               {agenda.map((event) => (
                 <Link
                   key={event.id}
                   to={`/app/${entity}/calendar`}
-                  className="flex items-start gap-3 rounded-xl px-2 py-2.5 transition-colors hover:bg-canvas"
+                  className="flex h-16 items-start gap-3 overflow-hidden rounded-xl px-2 py-2.5 transition-colors hover:bg-canvas"
                 >
                   <span className="grid w-12 shrink-0 place-items-center rounded-xl border border-line bg-canvas/70 py-1.5">
                     <span className="text-[10px] font-medium tracking-wide text-muted uppercase">{formatDate(event.date, 'short').split(' ')[1]}</span>
@@ -99,9 +99,9 @@ export function HomePage() {
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium text-ink">{event.title}</span>
-                    <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted">
-                      <span className="font-medium text-forest">{event.all_day ? 'Sepanjang hari' : event.time_label}</span>
-                      {event.project_title && <span>· {event.project_title}</span>}
+                    <span className="mt-0.5 block truncate text-[11px] text-muted">
+                      <span className="mr-2 font-medium text-forest">{event.all_day ? 'Sepanjang hari' : event.time_label}</span>
+                      {event.project_title && <span className="mr-2">· {event.project_title}</span>}
                       {(event.location || event.location_text) && <span>· {event.location ?? event.location_text}</span>}
                     </span>
                   </span>
@@ -135,23 +135,6 @@ export function HomePage() {
               className="mt-2"
               value={stats.tasksDone + stats.tasksOpen === 0 ? 0 : (stats.tasksDone / (stats.tasksDone + stats.tasksOpen)) * 100}
             />
-          </div>
-        </section>
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <section className="card p-5">
-          <h2 className="section-title">Progres proyek</h2>
-          <p className="muted mt-0.5">Persentase tugas selesai per proyek.</p>
-          <div className="mt-4">
-            <BarChart data={charts.progress} horizontal format={(v) => `${v}%`} />
-          </div>
-        </section>
-        <section className="card p-5">
-          <h2 className="section-title">Logbook lapangan</h2>
-          <p className="muted mt-0.5">Enam bulan terakhir, berdasarkan tanggal kunjungan.</p>
-          <div className="mt-3">
-            <AreaChart data={charts.logbookTrend} />
           </div>
         </section>
       </div>
